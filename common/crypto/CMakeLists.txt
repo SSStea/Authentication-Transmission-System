@@ -1,10 +1,8 @@
 set(TESLA_CRYPTO_HEADERS
-    include/tesla/crypto/CryptoAlgorithm.h
     include/tesla/crypto/CryptoProvider.h
     include/tesla/crypto/CryptoTypes.h
     include/tesla/crypto/CryptoUtilities.h
     include/tesla/crypto/KeyChain.h
-    include/tesla/crypto/KeyChainVerifier.h
     include/tesla/crypto/OpenSslCryptoProvider.h
     include/tesla/crypto/OpenSslSecureRandomProvider.h
     include/tesla/crypto/SecureRandomProvider.h
@@ -13,7 +11,6 @@ set(TESLA_CRYPTO_HEADERS
 set(TESLA_CRYPTO_SOURCES
     src/CryptoUtilities.cpp
     src/KeyChain.cpp
-    src/KeyChainVerifier.cpp
     src/OpenSslCryptoProvider.cpp
     src/OpenSslSecureRandomProvider.cpp
 )

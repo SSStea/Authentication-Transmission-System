@@ -1,7 +1,7 @@
 #pragma once
 
 #include "tesla/protocol/NodeControlMessage.h"
-#include "tesla/protocol/ProtocolDecodeError.h"
+#include "tesla/protocol/ProtocolTypes.h"
 
 #include <string>
 #include <variant>

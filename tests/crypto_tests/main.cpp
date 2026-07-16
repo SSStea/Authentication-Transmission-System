@@ -1,8 +1,6 @@
-#include "tesla/crypto/CryptoAlgorithm.h"
 #include "tesla/crypto/CryptoProvider.h"
 #include "tesla/crypto/CryptoUtilities.h"
 #include "tesla/crypto/KeyChain.h"
-#include "tesla/crypto/KeyChainVerifier.h"
 #include "tesla/crypto/OpenSslCryptoProvider.h"
 #include "tesla/crypto/OpenSslSecureRandomProvider.h"
 

@@ -1,7 +1,6 @@
 #include "tesla/core/NativeTeslaStrategy.h"
 
-#include "tesla/core/NativeAuthenticationDetails.h"
-#include "tesla/core/NativeVerificationDetails.h"
+#include "tesla/core/NativeTeslaDetails.h"
 #include "tesla/core/TeslaMac.h"
 #include "tesla/crypto/CryptoUtilities.h"
 

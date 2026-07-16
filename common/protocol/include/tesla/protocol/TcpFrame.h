@@ -2,9 +2,12 @@
 
 #include "tesla/protocol/ProtocolTypes.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace tesla::protocol
 {
@@ -59,5 +62,58 @@ public:
 
 private:
     TcpFramePayload m_varPayload;
+};
+
+using TcpFrameDecodeResult = std::variant<TcpFrame, ProtocolDecodeError>;
+
+/** @brief 对一整个TCP长度前缀帧逐字段编解码，不处理流分段。 */
+class TcpFrameCodec final
+{
+public:
+    static constexpr std::size_t LENGTH_PREFIX_SIZE = 4;
+    static constexpr std::size_t TYPE_SIZE = 1;
+
+    static ByteBuffer vecEncode(const TcpFrame& frmFrame);
+    static TcpFrameDecodeResult resDecode(const ByteBuffer& vecFrameBytes);
+
+private:
+    TcpFrameCodec() = delete;
+};
+
+/** @brief 一次流输入后解析出的完整帧以及可选的致命协议错误。 */
+class TcpFrameStreamDecodeBatch final
+{
+public:
+    TcpFrameStreamDecodeBatch(
+        std::vector<TcpFrame> vecFrames,
+        std::optional<ProtocolDecodeError> optError
+    );
+
+    const std::vector<TcpFrame>& vecFrames() const noexcept;
+    const std::optional<ProtocolDecodeError>& optError() const noexcept;
+
+private:
+    std::vector<TcpFrame>              m_vecFrames;
+    std::optional<ProtocolDecodeError> m_optError;
+};
+
+/**
+ * @brief 将任意分片或粘连的TCP字节流恢复为完整帧。
+ *
+ * 帧模型、整帧Codec和流式拆帧器共享同一帧边界与长度约束，因此集中在TCP帧模块。
+ */
+class TcpFrameStreamDecoder final
+{
+public:
+    explicit TcpFrameStreamDecoder(
+        std::size_t nMaximumFrameLength = 16U * 1024U * 1024U
+    );
+
+    TcpFrameStreamDecodeBatch batConsume(const ByteBuffer& vecBytes);
+    void reset() noexcept;
+
+private:
+    std::size_t m_nMaximumFrameLength;
+    ByteBuffer  m_vecPendingBytes;
 };
 }

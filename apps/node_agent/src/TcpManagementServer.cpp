@@ -1,8 +1,7 @@
 #include "tesla/node_agent/TcpManagementServer.h"
 
 #include "tesla/protocol/NodeControlJsonCodec.h"
-#include "tesla/protocol/TcpFrameCodec.h"
-#include "tesla/protocol/TcpFrameStreamDecoder.h"
+#include "tesla/protocol/TcpFrame.h"
 
 #include <arpa/inet.h>
 #include <cerrno>

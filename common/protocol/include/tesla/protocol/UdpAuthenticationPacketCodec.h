@@ -1,8 +1,7 @@
 #pragma once
 
-#include "tesla/protocol/ProtocolDecodeError.h"
+#include "tesla/protocol/ProtocolTypes.h"
 #include "tesla/protocol/UdpAuthenticationPacket.h"
-#include "tesla/protocol/UdpAuthenticationPacketContext.h"
 
 #include <variant>
 

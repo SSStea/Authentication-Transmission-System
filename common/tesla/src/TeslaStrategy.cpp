@@ -1,4 +1,4 @@
-#include "tesla/core/TeslaVerificationResult.h"
+#include "tesla/core/TeslaStrategy.h"
 
 #include <utility>
 

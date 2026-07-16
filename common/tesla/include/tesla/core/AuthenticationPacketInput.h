@@ -3,7 +3,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace tesla::core
 {
@@ -59,5 +61,44 @@ private:
     std::uint32_t m_u32IntervalIndex;
     std::uint32_t m_u32PacketIndex;
     Message       m_arrMessage;
+};
+
+/**
+ * @brief 表示一个认证组的算法输入及固定报文槽位。
+ *
+ * 单包和分组输入都属于密码算法域，并共享Sender、链和间隔约束，因此放在同一输入模型模块。
+ */
+class AuthenticationGroupInput final
+{
+public:
+    using PacketSlot = std::optional<AuthenticationPacketInput>;
+
+    AuthenticationGroupInput(
+        std::string strSenderId,
+        std::uint64_t u64ChainId,
+        std::uint32_t u32IntervalIndex,
+        std::uint32_t u32GroupIndex,
+        std::uint32_t u32FirstPacketIndex,
+        std::vector<PacketSlot> vecPacketSlots
+    );
+
+    bool bHasMissingPackets() const noexcept;
+    std::size_t nPacketSlotCount() const noexcept;
+    const std::string& strSenderId() const noexcept;
+    std::uint64_t u64ChainId() const noexcept;
+    std::uint32_t u32FirstPacketIndex() const noexcept;
+    std::uint32_t u32GroupIndex() const noexcept;
+    std::uint32_t u32IntervalIndex() const noexcept;
+    const std::vector<PacketSlot>& vecPacketSlots() const noexcept;
+
+private:
+    void validatePacketSlots() const;
+
+    std::string             m_strSenderId;
+    std::uint64_t           m_u64ChainId;
+    std::uint32_t           m_u32IntervalIndex;
+    std::uint32_t           m_u32GroupIndex;
+    std::uint32_t           m_u32FirstPacketIndex;
+    std::vector<PacketSlot> m_vecPacketSlots;
 };
 }

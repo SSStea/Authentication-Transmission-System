@@ -1,4 +1,4 @@
-#include "tesla/core/NativeAuthenticationDetails.h"
+#include "tesla/core/NativeTeslaDetails.h"
 
 #include <stdexcept>
 #include <utility>
@@ -21,5 +21,24 @@ const std::vector<std::optional<crypto::Digest>>&
 NativeAuthenticationDetails::vecPacketMacs() const noexcept
 {
     return m_vecPacketMacs;
+}
+
+NativeVerificationDetails::NativeVerificationDetails(
+    std::vector<NativePacketStatus> vecPacketStatuses
+)
+    : m_vecPacketStatuses(std::move(vecPacketStatuses))
+{
+    if (m_vecPacketStatuses.empty())
+    {
+        throw std::invalid_argument(
+            "Native verification details require packet statuses"
+        );
+    }
+}
+
+const std::vector<NativePacketStatus>&
+NativeVerificationDetails::vecPacketStatuses() const noexcept
+{
+    return m_vecPacketStatuses;
 }
 }

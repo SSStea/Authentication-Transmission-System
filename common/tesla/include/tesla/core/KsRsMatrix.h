@@ -1,6 +1,9 @@
 #pragma once
 
+#include "tesla/crypto/CryptoProvider.h"
+
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 namespace tesla::core
@@ -57,5 +60,40 @@ private:
     std::size_t                   m_nGroupSize;
     std::size_t                   m_nDetectionThreshold;
     std::vector<std::vector<bool>> m_vecRows;
+};
+
+/** @brief 保存KS+RS回退验证得到的位置分类和门限状态。 */
+class KsRsVerificationResult final
+{
+public:
+    KsRsVerificationResult(
+        std::vector<std::size_t> vecGoodPositions,
+        std::vector<std::size_t> vecBadPositions,
+        bool bDetectionThresholdExceeded
+    );
+
+    bool bDetectionThresholdExceeded() const noexcept;
+    const std::vector<std::size_t>& vecBadPositions() const noexcept;
+    const std::vector<std::size_t>& vecGoodPositions() const noexcept;
+
+private:
+    std::vector<std::size_t> m_vecGoodPositions;
+    std::vector<std::size_t> m_vecBadPositions;
+    bool                     m_bDetectionThresholdExceeded;
+};
+
+/** @brief 利用KS+RS矩阵和SAMD标签定位可认证及可疑报文位置。 */
+class KsRsVerifier final
+{
+public:
+    static KsRsVerificationResult resVerify(
+        const crypto::CryptoProvider& crpProvider,
+        const KsRsMatrix& matKsRs,
+        const std::vector<std::optional<crypto::Digest>>& vecPacketMacSlots,
+        const std::vector<crypto::Digest>& vecReceivedTau
+    );
+
+private:
+    KsRsVerifier() = delete;
 };
 }

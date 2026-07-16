@@ -1,8 +1,7 @@
 #pragma once
 
-#include "tesla/protocol/AuthenticationControlTypes.h"
 #include "tesla/protocol/ProtocolTypes.h"
-#include "tesla/protocol/UdpAuthenticationPacketContext.h"
+#include "tesla/protocol/UdpAuthenticationPacket.h"
 
 #include <cstdint>
 #include <optional>
@@ -11,6 +10,21 @@
 
 namespace tesla::protocol
 {
+/** @brief 控制面可选择的固定32字节摘要与HMAC算法。 */
+enum class AuthenticationCryptoAlgorithm
+{
+    Sha256,
+    Sm3,
+    Sha3_256
+};
+
+/** @brief Sender和Receiver配置确认消息中的目标类型。 */
+enum class AuthenticationConfigTarget
+{
+    Sender,
+    Receiver
+};
+
 /** @brief 改进TESLA控制配置中的分组大小和检测门限。 */
 class ImprovedTeslaControlParameters final
 {
@@ -168,5 +182,23 @@ private:
     bool                        m_bAccepted;
     std::string                 m_strErrorCode;
     std::string                 m_strMessage;
+};
+
+/**
+ * @brief 编解码认证控制消息中的固定长度十六进制值。
+ *
+ * 该Codec只服务本模块中的chainId、种子和K0字段，与认证控制详情共同变化。
+ */
+class AuthenticationControlValueCodec final
+{
+public:
+    static std::string strEncodeChainId(std::uint64_t u64ChainId);
+    static std::uint64_t u64DecodeChainId(const std::string& strChainId);
+
+    static std::string strEncodeBlock(const BinaryBlock& arrBlock);
+    static BinaryBlock arrDecodeBlock(const std::string& strBlock);
+
+private:
+    AuthenticationControlValueCodec() = delete;
 };
 }

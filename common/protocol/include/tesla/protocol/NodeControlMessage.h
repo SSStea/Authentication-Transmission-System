@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tesla/protocol/AuthenticationControlMessageDetails.h"
+#include "tesla/protocol/AuthenticationControl.h"
 
 #include <cstdint>
 #include <string>

@@ -4,15 +4,12 @@
 
 #include "tesla/core/AuthenticationAuthority.h"
 #include "tesla/core/AuthenticationRoundParameters.h"
-#include "tesla/core/TeslaAuthenticationMode.h"
-#include "tesla/crypto/CryptoAlgorithm.h"
 #include "tesla/crypto/OpenSslSecureRandomProvider.h"
 #include "tesla/node_agent/NodeAgentConfig.h"
 #include "tesla/node_agent/NodeAgentService.h"
 #include "tesla/protocol/NodeControlJsonCodec.h"
-#include "tesla/protocol/NodeDiscoveryJsonCodec.h"
-#include "tesla/protocol/TcpFrameCodec.h"
-#include "tesla/protocol/TcpFrameStreamDecoder.h"
+#include "tesla/protocol/NodeDiscoveryMessage.h"
+#include "tesla/protocol/TcpFrame.h"
 #include "tesla/protocol/UdpAuthenticationPacketCodec.h"
 
 #include <arpa/inet.h>

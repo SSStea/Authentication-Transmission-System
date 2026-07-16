@@ -27,4 +27,27 @@ public:
 private:
     std::vector<std::optional<crypto::Digest>> m_vecPacketMacs;
 };
+
+/** @brief 原生TESLA逐包验证结果。 */
+enum class NativePacketStatus
+{
+    Passed,
+    MacFailed,
+    MissingPacket,
+    MissingMac
+};
+
+/** @brief 保存原生TESLA模式的逐包验证状态。 */
+class NativeVerificationDetails final
+{
+public:
+    explicit NativeVerificationDetails(
+        std::vector<NativePacketStatus> vecPacketStatuses
+    );
+
+    const std::vector<NativePacketStatus>& vecPacketStatuses() const noexcept;
+
+private:
+    std::vector<NativePacketStatus> m_vecPacketStatuses;
+};
 }

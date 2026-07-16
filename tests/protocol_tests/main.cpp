@@ -1,8 +1,7 @@
 #include "tesla/core/UdpAuthenticationInputMapper.h"
 #include "tesla/protocol/NodeControlJsonCodec.h"
-#include "tesla/protocol/NodeDiscoveryJsonCodec.h"
-#include "tesla/protocol/TcpFrameCodec.h"
-#include "tesla/protocol/TcpFrameStreamDecoder.h"
+#include "tesla/protocol/NodeDiscoveryMessage.h"
+#include "tesla/protocol/TcpFrame.h"
 #include "tesla/protocol/UdpAuthenticationPacketCodec.h"
 
 #include <algorithm>

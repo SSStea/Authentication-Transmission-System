@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tesla/core/AuthenticationGroupInput.h"
+#include "tesla/core/AuthenticationPacketInput.h"
 #include "tesla/crypto/CryptoProvider.h"
 
 #include <vector>

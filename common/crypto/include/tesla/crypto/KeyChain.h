@@ -54,4 +54,23 @@ private:
 
     std::vector<Digest> m_vecKeys;
 };
+
+/**
+ * @brief 根据K0承诺验证TESLA披露密钥及其链索引。
+ *
+ * 验证逻辑与密钥链生成遵循同一单向散列关系，因此与KeyChain保存在同一模块文件。
+ */
+class KeyChainVerifier final
+{
+public:
+    static bool bVerifyDisclosedKey(
+        const CryptoProvider& crpProvider,
+        const Digest& digDisclosedKey,
+        std::size_t nDisclosedKeyIndex,
+        const Digest& digCommitmentKey
+    );
+
+private:
+    KeyChainVerifier() = delete;
+};
 }

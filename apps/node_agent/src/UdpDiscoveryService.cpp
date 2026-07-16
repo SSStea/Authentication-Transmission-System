@@ -1,6 +1,6 @@
 #include "tesla/node_agent/UdpDiscoveryService.h"
 
-#include "tesla/protocol/NodeDiscoveryJsonCodec.h"
+#include "tesla/protocol/NodeDiscoveryMessage.h"
 
 #include <arpa/inet.h>
 #include <cerrno>

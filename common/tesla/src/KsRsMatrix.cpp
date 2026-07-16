@@ -1,7 +1,11 @@
 #include "tesla/core/KsRsMatrix.h"
 
+#include "tesla/core/SamdAggregator.h"
+#include "tesla/crypto/CryptoUtilities.h"
+
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace tesla::core
 {
@@ -233,5 +237,129 @@ void KsRsMatrix::findBestParameters(
     {
         throw std::runtime_error("No valid KS+RS matrix parameters were found");
     }
+}
+
+KsRsVerificationResult::KsRsVerificationResult(
+    std::vector<std::size_t> vecGoodPositions,
+    std::vector<std::size_t> vecBadPositions,
+    bool bDetectionThresholdExceeded
+)
+    : m_vecGoodPositions(std::move(vecGoodPositions)),
+      m_vecBadPositions(std::move(vecBadPositions)),
+      m_bDetectionThresholdExceeded(bDetectionThresholdExceeded)
+{
+}
+
+bool KsRsVerificationResult::bDetectionThresholdExceeded() const noexcept
+{
+    return m_bDetectionThresholdExceeded;
+}
+
+const std::vector<std::size_t>&
+KsRsVerificationResult::vecBadPositions() const noexcept
+{
+    return m_vecBadPositions;
+}
+
+const std::vector<std::size_t>&
+KsRsVerificationResult::vecGoodPositions() const noexcept
+{
+    return m_vecGoodPositions;
+}
+
+KsRsVerificationResult KsRsVerifier::resVerify(
+    const crypto::CryptoProvider& crpProvider,
+    const KsRsMatrix& matKsRs,
+    const std::vector<std::optional<crypto::Digest>>& vecPacketMacSlots,
+    const std::vector<crypto::Digest>& vecReceivedTau
+)
+{
+    if (vecPacketMacSlots.empty() || vecPacketMacSlots.size() > matKsRs.nGroupSize())
+    {
+        throw std::invalid_argument(
+            "Packet MAC slots are outside the KS+RS group size"
+        );
+    }
+
+    if (vecReceivedTau.size() != matKsRs.nRowCount())
+    {
+        throw std::invalid_argument(
+            "Received SAMD tag count does not match the KS+RS matrix"
+        );
+    }
+
+    std::vector<bool> vecIsGood(vecPacketMacSlots.size(), false);
+
+    for (std::size_t nRowIndex = 0; nRowIndex < matKsRs.nRowCount(); ++nRowIndex)
+    {
+        bool                        bRowHasMissingMac = false;
+        std::vector<std::size_t>    vecRowPositions;
+        std::vector<crypto::Digest> vecRowMacs;
+
+        for (std::size_t nColumnIndex = 0;
+             nColumnIndex < vecPacketMacSlots.size();
+             ++nColumnIndex)
+        {
+            if (!matKsRs.bRowContains(nRowIndex, nColumnIndex))
+            {
+                continue;
+            }
+
+            vecRowPositions.push_back(nColumnIndex);
+
+            if (!vecPacketMacSlots[nColumnIndex].has_value())
+            {
+                bRowHasMissingMac = true;
+                break;
+            }
+
+            vecRowMacs.push_back(vecPacketMacSlots[nColumnIndex].value());
+        }
+
+        if (vecRowPositions.empty() || bRowHasMissingMac)
+        {
+            continue;
+        }
+
+        const crypto::Digest digCalculatedTau = SamdAggregator::digAggregateMacList(
+            crpProvider,
+            vecRowMacs
+        );
+
+        if (crypto::CryptoUtilities::bDigestEquals(
+                digCalculatedTau,
+                vecReceivedTau[nRowIndex]
+            ))
+        {
+            for (std::size_t nPosition : vecRowPositions)
+            {
+                vecIsGood[nPosition] = true;
+            }
+        }
+    }
+
+    std::vector<std::size_t> vecGoodPositions;
+    std::vector<std::size_t> vecBadPositions;
+
+    for (std::size_t nPosition = 0; nPosition < vecIsGood.size(); ++nPosition)
+    {
+        if (vecIsGood[nPosition])
+        {
+            vecGoodPositions.push_back(nPosition);
+        }
+        else
+        {
+            vecBadPositions.push_back(nPosition);
+        }
+    }
+
+    const bool bThresholdExceeded =
+        vecBadPositions.size() > matKsRs.nDetectionThreshold();
+
+    return KsRsVerificationResult(
+        std::move(vecGoodPositions),
+        std::move(vecBadPositions),
+        bThresholdExceeded
+    );
 }
 }

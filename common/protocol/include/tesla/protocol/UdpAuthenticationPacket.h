@@ -2,6 +2,7 @@
 
 #include "tesla/protocol/ProtocolTypes.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <variant>
@@ -9,6 +10,52 @@
 
 namespace tesla::protocol
 {
+enum class UdpAuthenticationMode
+{
+    Native,
+    Improved
+};
+
+/**
+ * @brief Receiver通过可信TCP配置获得的UDP条件字段解析上下文。
+ *
+ * 上下文决定本模块报文中Key和组标签的条件存在性，因此与UDP认证报文模型共同维护。
+ */
+class UdpAuthenticationPacketContext final
+{
+public:
+    UdpAuthenticationPacketContext(
+        UdpAuthenticationMode modeAuthentication,
+        std::uint32_t u32PacketsPerInterval,
+        std::uint32_t u32DisclosureDelay,
+        std::uint32_t u32TotalPacketCount,
+        std::uint32_t u32GroupSize = 0,
+        std::size_t nTauCount = 0
+    );
+
+    UdpAuthenticationMode modeAuthentication() const noexcept;
+    std::uint32_t u32PacketsPerInterval() const noexcept;
+    std::uint32_t u32DisclosureDelay() const noexcept;
+    std::uint32_t u32TotalPacketCount() const noexcept;
+    std::uint32_t u32GroupSize() const noexcept;
+    std::size_t nTauCount() const noexcept;
+
+    std::uint32_t u32ExpectedInterval(std::uint32_t u32PacketIndex) const;
+    bool bPacketCarriesDisclosedKey(
+        std::uint32_t u32IntervalIndex,
+        std::uint32_t u32PacketIndex
+    ) const noexcept;
+    bool bIsImprovedGroupEnd(std::uint32_t u32PacketIndex) const noexcept;
+
+private:
+    UdpAuthenticationMode m_modeAuthentication;
+    std::uint32_t         m_u32PacketsPerInterval;
+    std::uint32_t         m_u32DisclosureDelay;
+    std::uint32_t         m_u32TotalPacketCount;
+    std::uint32_t         m_u32GroupSize;
+    std::size_t           m_nTauCount;
+};
+
 /** @brief 原生TESLA数据报文专用详情，每个数据报文都携带一个MAC。 */
 class NativeUdpAuthenticationDetails final
 {

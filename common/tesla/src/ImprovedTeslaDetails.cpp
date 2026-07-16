@@ -1,10 +1,30 @@
-#include "tesla/core/ImprovedVerificationDetails.h"
+#include "tesla/core/ImprovedTeslaDetails.h"
 
 #include <utility>
 
 namespace tesla::core
 {
-// 改进验证详情集中保存实际路径、位置分类和门限判定。
+// 改进模式详情独立封装SAMD标签和快速组标签，避免污染统一结果类型。
+ImprovedAuthenticationDetails::ImprovedAuthenticationDetails(
+    std::vector<crypto::Digest> vecSamdTau,
+    std::optional<crypto::Digest> optFastGroupTag
+)
+    : m_vecSamdTau(std::move(vecSamdTau)),
+      m_optFastGroupTag(std::move(optFastGroupTag))
+{
+}
+
+const std::optional<crypto::Digest>&
+ImprovedAuthenticationDetails::optFastGroupTag() const noexcept
+{
+    return m_optFastGroupTag;
+}
+
+const std::vector<crypto::Digest>& ImprovedAuthenticationDetails::vecSamdTau() const noexcept
+{
+    return m_vecSamdTau;
+}
+
 ImprovedVerificationDetails::ImprovedVerificationDetails(
     ImprovedVerificationPath pathVerification,
     bool bFastGroupTagMatched,
@@ -30,7 +50,8 @@ bool ImprovedVerificationDetails::bFastGroupTagMatched() const noexcept
     return m_bFastGroupTagMatched;
 }
 
-ImprovedVerificationPath ImprovedVerificationDetails::pathVerification() const noexcept
+ImprovedVerificationPath
+ImprovedVerificationDetails::pathVerification() const noexcept
 {
     return m_pathVerification;
 }

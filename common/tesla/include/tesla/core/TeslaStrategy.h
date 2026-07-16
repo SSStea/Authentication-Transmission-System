@@ -1,12 +1,43 @@
 #pragma once
 
-#include "tesla/core/AuthenticationGroupInput.h"
-#include "tesla/core/TeslaAuthenticationDetails.h"
-#include "tesla/core/TeslaVerificationResult.h"
+#include "tesla/core/AuthenticationPacketInput.h"
+#include "tesla/core/ImprovedTeslaDetails.h"
+#include "tesla/core/NativeTeslaDetails.h"
 #include "tesla/crypto/CryptoTypes.h"
+
+#include <variant>
 
 namespace tesla::core
 {
+/** @brief 统一承载当前策略生成或接收的模式专用认证详情。 */
+using TeslaAuthenticationDetails = std::variant<
+    NativeAuthenticationDetails,
+    ImprovedAuthenticationDetails
+>;
+
+/** @brief 统一承载原生或改进TESLA的模式专用验证详情。 */
+using TeslaVerificationDetails = std::variant<
+    NativeVerificationDetails,
+    ImprovedVerificationDetails
+>;
+
+/** @brief 组合总体通过状态和当前模式专用验证详情。 */
+class TeslaVerificationResult final
+{
+public:
+    TeslaVerificationResult(
+        bool bPassed,
+        TeslaVerificationDetails varDetails
+    );
+
+    bool bPassed() const noexcept;
+    const TeslaVerificationDetails& varDetails() const noexcept;
+
+private:
+    bool                     m_bPassed;
+    TeslaVerificationDetails m_varDetails;
+};
+
 /**
  * @brief 原生和改进TESLA认证模式的统一策略接口。
  *

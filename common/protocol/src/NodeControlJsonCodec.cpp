@@ -1,7 +1,5 @@
 #include "tesla/protocol/NodeControlJsonCodec.h"
 
-#include "tesla/protocol/AuthenticationControlValueCodec.h"
-
 #include <nlohmann/json.hpp>
 
 #include <exception>

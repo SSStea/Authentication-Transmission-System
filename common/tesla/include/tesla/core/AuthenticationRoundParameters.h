@@ -1,8 +1,6 @@
 #pragma once
 
-#include "tesla/core/ImprovedTeslaParameters.h"
-#include "tesla/core/TeslaAuthenticationMode.h"
-#include "tesla/crypto/CryptoAlgorithm.h"
+#include "tesla/crypto/CryptoTypes.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +8,32 @@
 
 namespace tesla::core
 {
+/** @brief 算法域使用的原生或改进TESLA模式。 */
+enum class TeslaAuthenticationMode
+{
+    Native,
+    Improved
+};
+
+/** @brief 保存改进TESLA分组和检测门限，并预先验证KS+RS矩阵可构造。 */
+class ImprovedTeslaParameters final
+{
+public:
+    ImprovedTeslaParameters(
+        std::uint32_t u32GroupSize,
+        std::uint32_t u32DetectionThreshold
+    );
+
+    std::uint32_t u32GroupSize() const noexcept;
+    std::uint32_t u32DetectionThreshold() const noexcept;
+    std::size_t nTauCount() const noexcept;
+
+private:
+    std::uint32_t m_u32GroupSize;
+    std::uint32_t m_u32DetectionThreshold;
+    std::size_t   m_nTauCount;
+};
+
 /**
  * @brief 保存CA、Sender和Receiver共同信任的一轮认证算法与时间参数。
  *

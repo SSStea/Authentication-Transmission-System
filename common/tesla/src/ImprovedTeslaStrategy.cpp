@@ -1,8 +1,7 @@
 #include "tesla/core/ImprovedTeslaStrategy.h"
 
-#include "tesla/core/ImprovedAuthenticationDetails.h"
-#include "tesla/core/ImprovedVerificationDetails.h"
-#include "tesla/core/KsRsVerifier.h"
+#include "tesla/core/ImprovedTeslaDetails.h"
+#include "tesla/core/KsRsMatrix.h"
 #include "tesla/core/SamdAggregator.h"
 #include "tesla/core/TeslaMac.h"
 #include "tesla/crypto/CryptoUtilities.h"

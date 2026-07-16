@@ -1,8 +1,6 @@
 #include "tesla/node_agent/NodeAuthenticationConfigController.h"
 
 #include "tesla/core/AuthenticationRoundParameters.h"
-#include "tesla/core/ImprovedTeslaParameters.h"
-#include "tesla/core/SenderAuthenticationMaterial.h"
 #include "tesla/crypto/OpenSslCryptoProvider.h"
 
 #include <algorithm>

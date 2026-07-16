@@ -1,7 +1,7 @@
 #pragma once
 
-#include "tesla/core/ReceiverAuthenticationContext.h"
-#include "tesla/core/SenderAuthenticationMaterial.h"
+#include "tesla/core/ReceiverAuthenticationContextStore.h"
+#include "tesla/core/SenderAuthenticationContext.h"
 #include "tesla/crypto/SecureRandomProvider.h"
 
 #include <cstdint>

@@ -1,6 +1,5 @@
 #pragma once
 
-#include "tesla/crypto/CryptoAlgorithm.h"
 #include "tesla/crypto/CryptoTypes.h"
 
 namespace tesla::crypto

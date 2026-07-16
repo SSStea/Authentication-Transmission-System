@@ -1,4 +1,4 @@
-#include "tesla/protocol/ProtocolDecodeError.h"
+#include "tesla/protocol/ProtocolTypes.h"
 
 #include <utility>
 
