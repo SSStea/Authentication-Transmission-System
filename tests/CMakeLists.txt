@@ -2,3 +2,7 @@ add_subdirectory(protocol_tests)
 add_subdirectory(crypto_tests)
 add_subdirectory(tesla_tests)
 add_subdirectory(integration_tests)
+
+if(WIN32 AND BUILD_GUI)
+    add_subdirectory(gui_stage5_tests)
+endif()

@@ -1,9 +1,21 @@
 qt_add_executable(tesla_uav_monitor_gui
+    UavMonitorMainWindow.cpp
+    UavMonitorMainWindow.h
+    UavMonitorNetworkController.cpp
+    UavMonitorNetworkController.h
     main.cpp
     CMakeLists.txt
 )
 
-source_group("Source Files" FILES main.cpp)
+source_group("Header Files" FILES
+    UavMonitorMainWindow.h
+    UavMonitorNetworkController.h
+)
+source_group("Source Files" FILES
+    UavMonitorMainWindow.cpp
+    UavMonitorNetworkController.cpp
+    main.cpp
+)
 source_group("Build Files" FILES CMakeLists.txt)
 
 target_link_libraries(tesla_uav_monitor_gui

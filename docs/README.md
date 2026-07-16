@@ -4,3 +4,4 @@
 
 - [算法输入与UDP报文类型边界](algorithm-input-and-udp-boundary.md)
 - [网络协议与NodeAgent](network-protocol-and-node-agent.md)
+- [阶段5四套GUI框架与连接](stage5-gui-framework-and-connections.md)

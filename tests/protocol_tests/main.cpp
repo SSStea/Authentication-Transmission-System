@@ -1,4 +1,5 @@
 #include "tesla/core/UdpAuthenticationInputMapper.h"
+#include "tesla/protocol/AttackControl.h"
 #include "tesla/protocol/NodeControlJsonCodec.h"
 #include "tesla/protocol/NodeDiscoveryMessage.h"
 #include "tesla/protocol/TcpFrame.h"
@@ -164,6 +165,58 @@ bool bTestControlJsonMessages()
     bPassed = bExpect(
         std::holds_alternative<ProtocolDecodeError>(resInvalid),
         "Unsupported control JSON is rejected"
+    ) && bPassed;
+
+    return bPassed;
+}
+
+// 攻击测试端使用独立控制协议，避免后续攻击计划混入正常节点配置消息。
+bool bTestAttackControlJsonMessages()
+{
+    const AttackControlMessage msgHello(AttackClientHelloDetails("TESLA Manager"));
+    const AttackControlDecodeResult resHello = AttackControlJsonCodec::resDecode(
+        AttackControlJsonCodec::strEncode(msgHello)
+    );
+    bool bPassed = bExpect(
+        std::holds_alternative<AttackControlMessage>(resHello)
+            && std::get<AttackControlMessage>(resHello).typeMessage()
+                == AttackControlMessageType::ClientHello,
+        "Attack control hello JSON round trip"
+    );
+
+    const AttackControlMessage msgStatus(AttackStatusControlDetails(
+        "attack-status-1",
+        "ATTACKER-200",
+        true,
+        false,
+        1'700'000'000'000ULL
+    ));
+    const AttackControlDecodeResult resStatus = AttackControlJsonCodec::resDecode(
+        AttackControlJsonCodec::strEncode(msgStatus)
+    );
+    bPassed = bExpect(
+        std::holds_alternative<AttackControlMessage>(resStatus)
+            && std::get<AttackStatusControlDetails>(
+                std::get<AttackControlMessage>(resStatus).varDetails()
+            ).bMulticastListening(),
+        "Attack status JSON round trip"
+    ) && bPassed;
+
+    const AttackControlDecodeResult resNodeHello = AttackControlJsonCodec::resDecode(
+        R"({"type":"CLIENT_HELLO","role":"MANAGER"})"
+    );
+    bPassed = bExpect(
+        std::holds_alternative<ProtocolDecodeError>(resNodeHello),
+        "Attack control rejects a normal NodeAgent hello"
+    ) && bPassed;
+
+    const AttackControlDecodeResult resNodeStatus =
+        AttackControlJsonCodec::resDecode(
+            R"({"type":"STATUS_REQUEST","requestId":"node-status-1"})"
+        );
+    bPassed = bExpect(
+        std::holds_alternative<ProtocolDecodeError>(resNodeStatus),
+        "Attack control rejects a normal NodeAgent status request"
     ) && bPassed;
 
     return bPassed;
@@ -495,6 +548,7 @@ int main()
     bPassed = bTestTcpFrameRoundTrips() && bPassed;
     bPassed = bTestTcpStreamSegmentation() && bPassed;
     bPassed = bTestControlJsonMessages() && bPassed;
+    bPassed = bTestAttackControlJsonMessages() && bPassed;
     bPassed = bTestAuthenticationControlJson() && bPassed;
     bPassed = bTestNativeUdpPackets() && bPassed;
     bPassed = bTestImprovedAndDisclosurePackets() && bPassed;

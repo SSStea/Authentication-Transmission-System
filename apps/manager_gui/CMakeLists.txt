@@ -1,9 +1,21 @@
 qt_add_executable(tesla_manager_gui
+    ManagerMainWindow.cpp
+    ManagerMainWindow.h
+    ManagerNetworkController.cpp
+    ManagerNetworkController.h
     main.cpp
     CMakeLists.txt
 )
 
-source_group("Source Files" FILES main.cpp)
+source_group("Header Files" FILES
+    ManagerMainWindow.h
+    ManagerNetworkController.h
+)
+source_group("Source Files" FILES
+    ManagerMainWindow.cpp
+    ManagerNetworkController.cpp
+    main.cpp
+)
 source_group("Build Files" FILES CMakeLists.txt)
 
 target_link_libraries(tesla_manager_gui

@@ -8,7 +8,7 @@
 - 绝对路径：`D:\0_Tesla_Authenticication_Protocol\Authentication_Transmission_System`
 - Git 远端：`https://github.com/SSStea/Authentication-Transmission-System.git`
 - 开发指南：`D:\0_Tesla_Authenticication_Protocol\TESLA_SYSTEM_DEVELOPMENT_GUIDE_DRAFT.md`
-- 当前阶段：阶段 4 已完成，等待阶段 5 实施方案确认
+- 当前阶段：阶段 5 已完成，等待阶段 6 实施方案确认
 
 旧仓库只作为已验证逻辑的阅读来源，不作为本仓库的子模块，也不得整体复制旧工程。
 
@@ -33,7 +33,8 @@ tests/
 ├── protocol_tests/
 ├── crypto_tests/
 ├── tesla_tests/
-└── integration_tests/
+├── integration_tests/
+└── gui_stage5_tests/
 ```
 
 ## 代码组织原则
@@ -44,6 +45,7 @@ tests/
 - `CryptoTypes`：密码算法枚举和公共二进制类型；
 - `KeyChain`：密钥链生成、访问和披露密钥验证；
 - `ProtocolTypes`：协议公共二进制类型和结构化解析错误；
+- `AttackControl`：集中管理GUI与独立攻击测试端之间的最小控制协议；
 - `TcpFrame`：TCP载荷、帧模型、整帧Codec和流式拆帧；
 - `NodeDiscoveryMessage`：发现消息模型和UDP JSON编解码；
 - `AuthenticationControl`：阶段4认证配置类型、详情和固定十六进制字段编解码；
@@ -58,7 +60,7 @@ tests/
 密码提供者与安全随机源接口、CA、原生/改进策略实现、控制JSON Codec、UDP二进制Codec和
 NodeAgent各网络服务继续独立，保留安全边界、策略边界和序列化边界。
 
-阶段 1 提供可构建、可启动的最小程序入口。阶段 2 实现三种密码套件、密钥链、原生/改进TESLA策略、快速组认证和KS+RS回退。阶段 3 实现无Qt公共协议库、Linux POSIX NodeAgent运行时、TCP管理、UDP发现和TESLA组播。阶段 4 实现安全随机源、CA独立材料签发、Sender本地密钥链自检、Receiver公开上下文映射和事务性TCP配置；工作负载、GUI业务和指标仍在后续阶段分别确认后实现。
+阶段 1 提供可构建、可启动的最小程序入口。阶段 2 实现三种密码套件、密钥链、原生/改进TESLA策略、快速组认证和KS+RS回退。阶段 3 实现无Qt公共协议库、Linux POSIX NodeAgent运行时、TCP管理、UDP发现和TESLA组播。阶段 4 实现安全随机源、CA独立材料签发、Sender本地密钥链自检、Receiver公开上下文映射和事务性TCP配置。阶段 5 建立四套独立GUI职责框架，并实现节点发现、MANAGER/MONITOR连接、PC节点Qt管理服务、攻击端独立控制服务和只读组播监听；文本、文件、报文展示、指标与攻击执行仍按阶段 6 至阶段 10 分别确认后实现。
 
 ## Windows 构建
 
@@ -80,6 +82,16 @@ Windows 构建生成：
 - `tesla_uav_monitor_gui`
 - `tesla_attack_test_gui`
 - `tesla_node_agent`
+
+从命令行直接运行构建目录中的GUI时，需要让Windows能够找到Qt运行库：
+
+```powershell
+$env:PATH="C:/Qt/6.10.2/msvc2022_64/bin;$env:PATH"
+.\build\windows\Release\tesla_manager_gui.exe
+```
+
+Visual Studio调试启动会使用已配置的Qt环境。需要复制到其他机器独立运行时，使用对应Qt版本的
+`windeployqt`部署运行库，不把部署生成物提交到Git。
 
 Windows下的 `tesla_node_agent` 是审阅入口，POSIX Socket运行时源码显示在独立的
 `tesla_node_agent_runtime` 项目中；正式网络服务只在Linux目标上参与编译和运行。
@@ -123,4 +135,5 @@ Ubuntu Server构建生成 `tesla_node_agent`。
 NodeAgent自动选择活动的非回环IPv4局域网接口，使用内部固定端口和组播地址启动服务，
 不要求普通用户填写网卡、IP、端口或组播地址。按 `Ctrl+C` 可安全停止服务。
 
-阶段3至阶段4的协议和联调说明见[网络协议与NodeAgent](docs/network-protocol-and-node-agent.md)。
+阶段3至阶段4的协议和联调说明见[网络协议与NodeAgent](docs/network-protocol-and-node-agent.md)，
+阶段5说明见[四套GUI框架与连接](docs/stage5-gui-framework-and-connections.md)。
