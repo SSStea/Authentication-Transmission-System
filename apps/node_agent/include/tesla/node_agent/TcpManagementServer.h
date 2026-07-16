@@ -1,0 +1,67 @@
+#pragma once
+
+#include "tesla/protocol/NodeControlMessage.h"
+#include "tesla/protocol/TcpFrame.h"
+
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+namespace tesla::node_agent
+{
+/** @brief 提供NodeAgent的MANAGER/MONITOR TCP控制连接和阶段3状态查询。 */
+class TcpManagementServer final
+{
+public:
+    using RuntimeStateProvider = std::function<std::pair<bool, bool>()>;
+
+    TcpManagementServer(
+        std::string strBindAddress,
+        std::uint16_t u16Port,
+        std::string strNodeName,
+        RuntimeStateProvider fnStateProvider
+    );
+    ~TcpManagementServer();
+
+    TcpManagementServer(const TcpManagementServer&) = delete;
+    TcpManagementServer& operator=(const TcpManagementServer&) = delete;
+
+    void start();
+    void stop() noexcept;
+    bool bIsRunning() const noexcept;
+    std::size_t nConnectedClientCount() const noexcept;
+
+private:
+    struct ClientConnection;
+
+    void acceptLoop();
+    void clientLoop(const std::shared_ptr<ClientConnection>& ptrClient);
+    bool bHandleFrame(
+        const std::shared_ptr<ClientConnection>& ptrClient,
+        bool& bHelloReceived,
+        protocol::TcpClientRole& roleClient,
+        const protocol::TcpFrame& frmFrame
+    );
+    bool bSendControlMessage(
+        const std::shared_ptr<ClientConnection>& ptrClient,
+        const protocol::NodeControlMessage& msgMessage
+    ) const noexcept;
+
+    std::string                      m_strBindAddress;
+    std::uint16_t                    m_u16Port;
+    std::string                      m_strNodeName;
+    RuntimeStateProvider             m_fnStateProvider;
+    std::atomic<bool>                m_bRunning{false};
+    std::atomic<int>                 m_nListenSocket{-1};
+    std::thread                      m_thrAccept;
+    mutable std::mutex               m_mtxClients;
+    std::vector<std::shared_ptr<ClientConnection>> m_vecClients;
+    std::vector<std::thread>         m_vecClientThreads;
+};
+}

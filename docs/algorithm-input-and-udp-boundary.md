@@ -14,10 +14,23 @@
 
 ## 阶段3：协议域
 
-阶段3必须在 `common/protocol` 中建立独立类型和类：
+阶段3已在 `common/protocol` 中建立独立类型和类：
 
 - `UdpAuthenticationPacket`：表示第14章固定UDP认证报文中的实际字段及条件字段。
 - `UdpAuthenticationPacketCodec`：负责网络字节序、长度检查和UDP负载编解码。
-- 显式适配逻辑：在协议解析及上下文检查成功后，将UDP报文和可信Receiver上下文转换为算法域输入。
+- `UdpAuthenticationPacketContext`：保存由可信TCP配置获得、但不在每个UDP报文中重复携带的认证模式和条件字段推导参数。
+- `UdpAuthenticationInputMapper`：在协议解析及上下文检查成功后，将UDP数据报文和由源IP映射得到的可信Sender ID转换为算法域输入。
 
 `UdpAuthenticationPacket`不得继承、别名或直接复用 `AuthenticationPacketInput`；`UdpAuthenticationPacketCodec`不得调用 `AuthenticationInputEncoder`代替UDP序列化。反向发送时也必须先由策略生成模式专用认证详情，再由协议Codec决定实际携带字段。
+
+实际调用边界固定为：
+
+```text
+UDP原始字节
+  -> UdpAuthenticationPacketCodec + 可信TCP上下文
+  -> UdpAuthenticationPacket（协议域）
+  -> 源IP到senderId的可信映射
+  -> UdpAuthenticationInputMapper
+  -> AuthenticationPacketInput（算法域）
+  -> AuthenticationInputEncoder（MAC输入编码）
+```

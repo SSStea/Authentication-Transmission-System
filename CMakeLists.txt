@@ -25,6 +25,16 @@ endif()
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 
+# 控制面只在协议边界使用JSON；固定版本和校验值保证各平台得到相同依赖。
+include(FetchContent)
+FetchContent_Declare(
+    nlohmann_json
+    URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
+    URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(nlohmann_json)
+
 if(BUILD_GUI)
     find_package(Qt6 REQUIRED COMPONENTS Core Network Widgets Charts)
     qt_standard_project_setup()

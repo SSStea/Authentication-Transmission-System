@@ -19,6 +19,7 @@ set(TESLA_CORE_HEADERS
     include/tesla/core/TeslaStrategy.h
     include/tesla/core/TeslaVerificationDetails.h
     include/tesla/core/TeslaVerificationResult.h
+    include/tesla/core/UdpAuthenticationInputMapper.h
 )
 
 set(TESLA_CORE_SOURCES
@@ -37,6 +38,7 @@ set(TESLA_CORE_SOURCES
     src/SamdAggregator.cpp
     src/TeslaMac.cpp
     src/TeslaVerificationResult.cpp
+    src/UdpAuthenticationInputMapper.cpp
 )
 
 add_library(tesla_core STATIC

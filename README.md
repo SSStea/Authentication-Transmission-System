@@ -8,7 +8,7 @@
 - 绝对路径：`D:\0_Tesla_Authenticication_Protocol\Authentication_Transmission_System`
 - Git 远端：`https://github.com/SSStea/Authentication-Transmission-System.git`
 - 开发指南：`D:\0_Tesla_Authenticication_Protocol\TESLA_SYSTEM_DEVELOPMENT_GUIDE_DRAFT.md`
-- 当前阶段：阶段 2，密码套件与TESLA公共算法
+- 当前阶段：阶段 3 已完成，等待阶段 4 实施方案确认
 
 旧仓库只作为已验证逻辑的阅读来源，不作为本仓库的子模块，也不得整体复制旧工程。
 
@@ -36,7 +36,7 @@ tests/
 └── integration_tests/
 ```
 
-阶段 1 提供可构建、可启动的最小程序入口。阶段 2 实现三种密码套件、密钥链、原生/改进TESLA策略、快速组认证和KS+RS回退；网络协议、工作负载和指标仍在后续阶段分别确认后实现。
+阶段 1 提供可构建、可启动的最小程序入口。阶段 2 实现三种密码套件、密钥链、原生/改进TESLA策略、快速组认证和KS+RS回退。阶段 3 实现无Qt公共协议库、Linux POSIX NodeAgent运行时、TCP管理、UDP发现和TESLA组播；工作负载、CA和指标仍在后续阶段分别确认后实现。
 
 ## Windows 构建
 
@@ -58,6 +58,9 @@ Windows 构建生成：
 - `tesla_uav_monitor_gui`
 - `tesla_attack_test_gui`
 - `tesla_node_agent`
+
+Windows下的 `tesla_node_agent` 是审阅入口，POSIX Socket运行时源码显示在独立的
+`tesla_node_agent_runtime` 项目中；正式网络服务只在Linux目标上参与编译和运行。
 
 ### Visual Studio 审阅解决方案
 
@@ -82,7 +85,7 @@ ctest --preset windows-vs2022-review-release
 
 ## Ubuntu Server 构建
 
-依赖：C++17 编译器、OpenSSL、Threads 和 CMake。Ubuntu Server不需要Qt。
+依赖：C++17 编译器、OpenSSL、Threads 和 CMake。Ubuntu Server不需要Qt。配置阶段会按固定版本和SHA-256校验值获取仅用于控制面的nlohmann/json 3.12.0。
 
 ```bash
 cmake -S . -B build/linux \
@@ -90,6 +93,12 @@ cmake -S . -B build/linux \
   -DBUILD_GUI=OFF
 
 cmake --build build/linux -j
+ctest --test-dir build/linux --output-on-failure
 ```
 
 Ubuntu Server构建生成 `tesla_node_agent`。
+
+NodeAgent自动选择活动的非回环IPv4局域网接口，使用内部固定端口和组播地址启动服务，
+不要求普通用户填写网卡、IP、端口或组播地址。按 `Ctrl+C` 可安全停止服务。
+
+阶段3协议和联调说明见[网络协议与NodeAgent](docs/network-protocol-and-node-agent.md)。
