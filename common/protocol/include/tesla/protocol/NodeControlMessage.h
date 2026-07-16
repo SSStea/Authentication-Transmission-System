@@ -1,5 +1,7 @@
 #pragma once
 
+#include "tesla/protocol/AuthenticationControlMessageDetails.h"
+
 #include <cstdint>
 #include <string>
 #include <variant>
@@ -19,6 +21,9 @@ enum class NodeControlMessageType
     Pong,
     StatusRequest,
     StatusResponse,
+    SenderAuthenticationConfig,
+    ReceiverAuthenticationContexts,
+    AuthenticationConfigAcknowledgement,
     ErrorResponse
 };
 
@@ -98,6 +103,9 @@ using NodeControlMessageDetails = std::variant<
     ClientHelloControlDetails,
     RequestControlDetails,
     StatusResponseControlDetails,
+    SenderAuthenticationConfigControlDetails,
+    ReceiverAuthenticationContextsControlDetails,
+    AuthenticationConfigAcknowledgementControlDetails,
     ErrorResponseControlDetails
 >;
 

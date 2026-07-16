@@ -4,10 +4,12 @@
 #include "tesla/crypto/KeyChain.h"
 #include "tesla/crypto/KeyChainVerifier.h"
 #include "tesla/crypto/OpenSslCryptoProvider.h"
+#include "tesla/crypto/OpenSslSecureRandomProvider.h"
 
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -21,6 +23,7 @@ using tesla::crypto::Digest;
 using tesla::crypto::KeyChain;
 using tesla::crypto::KeyChainVerifier;
 using tesla::crypto::OpenSslCryptoProvider;
+using tesla::crypto::OpenSslSecureRandomProvider;
 
 // 测试辅助：把可读字符串转换为密码接口使用的原始字节。
 ByteBuffer vecFromString(const std::string& strValue)
@@ -119,6 +122,28 @@ bool bTestKeyChain(CryptoAlgorithm algAlgorithm)
 
     return bResult;
 }
+
+// 验证正式随机源返回指定长度且拒绝无意义的零长度请求。
+bool bTestSecureRandomProvider()
+{
+    const OpenSslSecureRandomProvider rngProvider;
+    const ByteBuffer vecFirst = rngProvider.vecGenerateBytes(32);
+    const ByteBuffer vecSecond = rngProvider.vecGenerateBytes(32);
+    bool bRejectedZeroLength = false;
+
+    try
+    {
+        static_cast<void>(rngProvider.vecGenerateBytes(0));
+    }
+    catch (const std::invalid_argument&)
+    {
+        bRejectedZeroLength = true;
+    }
+
+    return bExpect(vecFirst.size() == 32 && vecSecond.size() == 32, "Secure random length")
+        && bExpect(vecFirst != vecSecond, "Independent secure random outputs")
+        && bExpect(bRejectedZeroLength, "Zero-length secure random request is rejected");
+}
 }
 
 int main()
@@ -149,6 +174,8 @@ int main()
     {
         bPassed = bTestKeyChain(algAlgorithm) && bPassed;
     }
+
+    bPassed = bTestSecureRandomProvider() && bPassed;
 
     if (!bPassed)
     {

@@ -1,4 +1,7 @@
 set(TESLA_PROTOCOL_HEADERS
+    include/tesla/protocol/AuthenticationControlMessageDetails.h
+    include/tesla/protocol/AuthenticationControlTypes.h
+    include/tesla/protocol/AuthenticationControlValueCodec.h
     include/tesla/protocol/NodeControlJsonCodec.h
     include/tesla/protocol/NodeControlMessage.h
     include/tesla/protocol/NodeDiscoveryJsonCodec.h
@@ -14,6 +17,8 @@ set(TESLA_PROTOCOL_HEADERS
 )
 
 set(TESLA_PROTOCOL_SOURCES
+    src/AuthenticationControlMessageDetails.cpp
+    src/AuthenticationControlValueCodec.cpp
     src/NodeControlJsonCodec.cpp
     src/NodeControlMessage.cpp
     src/NodeDiscoveryJsonCodec.cpp

@@ -15,17 +15,22 @@
 
 namespace tesla::node_agent
 {
-/** @brief 提供NodeAgent的MANAGER/MONITOR TCP控制连接和阶段3状态查询。 */
+/** @brief 提供NodeAgent的TCP角色握手、状态查询和认证配置分发。 */
 class TcpManagementServer final
 {
 public:
     using RuntimeStateProvider = std::function<std::pair<bool, bool>()>;
+    using ControlMessageHandler = std::function<protocol::NodeControlMessage(
+        protocol::TcpClientRole,
+        const protocol::NodeControlMessage&
+    )>;
 
     TcpManagementServer(
         std::string strBindAddress,
         std::uint16_t u16Port,
         std::string strNodeName,
-        RuntimeStateProvider fnStateProvider
+        RuntimeStateProvider fnStateProvider,
+        ControlMessageHandler fnControlMessageHandler
     );
     ~TcpManagementServer();
 
@@ -57,6 +62,7 @@ private:
     std::uint16_t                    m_u16Port;
     std::string                      m_strNodeName;
     RuntimeStateProvider             m_fnStateProvider;
+    ControlMessageHandler            m_fnControlMessageHandler;
     std::atomic<bool>                m_bRunning{false};
     std::atomic<int>                 m_nListenSocket{-1};
     std::thread                      m_thrAccept;

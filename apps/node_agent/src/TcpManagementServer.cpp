@@ -97,16 +97,25 @@ TcpManagementServer::TcpManagementServer(
     std::string strBindAddress,
     std::uint16_t u16Port,
     std::string strNodeName,
-    RuntimeStateProvider fnStateProvider
+    RuntimeStateProvider fnStateProvider,
+    ControlMessageHandler fnControlMessageHandler
 )
     : m_strBindAddress(std::move(strBindAddress)),
       m_u16Port(u16Port),
       m_strNodeName(std::move(strNodeName)),
-      m_fnStateProvider(std::move(fnStateProvider))
+      m_fnStateProvider(std::move(fnStateProvider)),
+      m_fnControlMessageHandler(std::move(fnControlMessageHandler))
 {
     if (!m_fnStateProvider)
     {
         throw std::invalid_argument("TCP management server requires a state provider");
+    }
+
+    if (!m_fnControlMessageHandler)
+    {
+        throw std::invalid_argument(
+            "TCP management server requires a control message handler"
+        );
     }
 }
 
@@ -454,6 +463,17 @@ bool TcpManagementServer::bHandleFrame(
                 prState.second,
                 u64NowMilliseconds()
             ))
+        );
+    }
+
+    if (msgMessage.typeMessage()
+            == protocol::NodeControlMessageType::SenderAuthenticationConfig
+        || msgMessage.typeMessage()
+            == protocol::NodeControlMessageType::ReceiverAuthenticationContexts)
+    {
+        return bSendControlMessage(
+            ptrClient,
+            m_fnControlMessageHandler(roleClient, msgMessage)
         );
     }
 

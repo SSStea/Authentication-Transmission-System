@@ -8,7 +8,7 @@
 - 绝对路径：`D:\0_Tesla_Authenticication_Protocol\Authentication_Transmission_System`
 - Git 远端：`https://github.com/SSStea/Authentication-Transmission-System.git`
 - 开发指南：`D:\0_Tesla_Authenticication_Protocol\TESLA_SYSTEM_DEVELOPMENT_GUIDE_DRAFT.md`
-- 当前阶段：阶段 3 已完成，等待阶段 4 实施方案确认
+- 当前阶段：阶段 4 已完成，等待阶段 5 实施方案确认
 
 旧仓库只作为已验证逻辑的阅读来源，不作为本仓库的子模块，也不得整体复制旧工程。
 
@@ -36,7 +36,7 @@ tests/
 └── integration_tests/
 ```
 
-阶段 1 提供可构建、可启动的最小程序入口。阶段 2 实现三种密码套件、密钥链、原生/改进TESLA策略、快速组认证和KS+RS回退。阶段 3 实现无Qt公共协议库、Linux POSIX NodeAgent运行时、TCP管理、UDP发现和TESLA组播；工作负载、CA和指标仍在后续阶段分别确认后实现。
+阶段 1 提供可构建、可启动的最小程序入口。阶段 2 实现三种密码套件、密钥链、原生/改进TESLA策略、快速组认证和KS+RS回退。阶段 3 实现无Qt公共协议库、Linux POSIX NodeAgent运行时、TCP管理、UDP发现和TESLA组播。阶段 4 实现安全随机源、CA独立材料签发、Sender本地密钥链自检、Receiver公开上下文映射和事务性TCP配置；工作负载、GUI业务和指标仍在后续阶段分别确认后实现。
 
 ## Windows 构建
 
@@ -101,4 +101,4 @@ Ubuntu Server构建生成 `tesla_node_agent`。
 NodeAgent自动选择活动的非回环IPv4局域网接口，使用内部固定端口和组播地址启动服务，
 不要求普通用户填写网卡、IP、端口或组播地址。按 `Ctrl+C` 可安全停止服务。
 
-阶段3协议和联调说明见[网络协议与NodeAgent](docs/network-protocol-and-node-agent.md)。
+阶段3至阶段4的协议和联调说明见[网络协议与NodeAgent](docs/network-protocol-and-node-agent.md)。

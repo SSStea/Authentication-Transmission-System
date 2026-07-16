@@ -6,6 +6,8 @@ set(TESLA_CRYPTO_HEADERS
     include/tesla/crypto/KeyChain.h
     include/tesla/crypto/KeyChainVerifier.h
     include/tesla/crypto/OpenSslCryptoProvider.h
+    include/tesla/crypto/OpenSslSecureRandomProvider.h
+    include/tesla/crypto/SecureRandomProvider.h
 )
 
 set(TESLA_CRYPTO_SOURCES
@@ -13,6 +15,7 @@ set(TESLA_CRYPTO_SOURCES
     src/KeyChain.cpp
     src/KeyChainVerifier.cpp
     src/OpenSslCryptoProvider.cpp
+    src/OpenSslSecureRandomProvider.cpp
 )
 
 add_library(tesla_crypto STATIC

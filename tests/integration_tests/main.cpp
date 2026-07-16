@@ -2,6 +2,11 @@
 
 #if defined(__linux__)
 
+#include "tesla/core/AuthenticationAuthority.h"
+#include "tesla/core/AuthenticationRoundParameters.h"
+#include "tesla/core/TeslaAuthenticationMode.h"
+#include "tesla/crypto/CryptoAlgorithm.h"
+#include "tesla/crypto/OpenSslSecureRandomProvider.h"
 #include "tesla/node_agent/NodeAgentConfig.h"
 #include "tesla/node_agent/NodeAgentService.h"
 #include "tesla/protocol/NodeControlJsonCodec.h"
@@ -127,6 +132,157 @@ ByteBuffer vecEncodeControl(const NodeControlMessage& msgMessage)
     return TcpFrameCodec::vecEncode(TcpFrame(JsonControlFramePayload(
         NodeControlJsonCodec::strEncode(msgMessage)
     )));
+}
+
+NodeControlMessage msgExchangeControl(
+    const std::string& strAddress,
+    std::uint16_t u16Port,
+    TcpClientRole roleClient,
+    const NodeControlMessage& msgRequest
+)
+{
+    TestSocket sckClient(nConnectTcp(strAddress, u16Port));
+    ByteBuffer vecRequest = vecEncodeControl(NodeControlMessage(
+        ClientHelloControlDetails(roleClient)
+    ));
+    const ByteBuffer vecMessage = vecEncodeControl(msgRequest);
+    vecRequest.insert(vecRequest.end(), vecMessage.begin(), vecMessage.end());
+
+    if (!bSendAll(sckClient.nDescriptor(), vecRequest))
+    {
+        throw std::runtime_error("Unable to send authentication control request");
+    }
+
+    TcpFrameStreamDecoder decResponse;
+    const auto tpDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < tpDeadline)
+    {
+        pollfd pfdSocket{};
+        pfdSocket.fd = sckClient.nDescriptor();
+        pfdSocket.events = POLLIN;
+        if (poll(&pfdSocket, 1, 200) <= 0)
+        {
+            continue;
+        }
+
+        std::uint8_t arrBuffer[8192]{};
+        const ssize_t nReceived = recv(
+            sckClient.nDescriptor(),
+            arrBuffer,
+            sizeof(arrBuffer),
+            0
+        );
+        if (nReceived <= 0)
+        {
+            break;
+        }
+
+        const TcpFrameStreamDecodeBatch batFrames = decResponse.batConsume(ByteBuffer(
+            arrBuffer,
+            arrBuffer + nReceived
+        ));
+        if (batFrames.optError().has_value())
+        {
+            throw std::runtime_error("Authentication response frame is malformed");
+        }
+
+        for (const TcpFrame& frmFrame : batFrames.vecFrames())
+        {
+            const NodeControlDecodeResult resMessage = NodeControlJsonCodec::resDecode(
+                std::get<JsonControlFramePayload>(frmFrame.varPayload()).strJson()
+            );
+            if (std::holds_alternative<NodeControlMessage>(resMessage))
+            {
+                return std::get<NodeControlMessage>(resMessage);
+            }
+        }
+    }
+
+    throw std::runtime_error("Timed out waiting for authentication control response");
+}
+
+BinaryBlock arrFromDigest(const tesla::crypto::Digest& digValue)
+{
+    BinaryBlock arrResult{};
+    std::copy(digValue.begin(), digValue.end(), arrResult.begin());
+    return arrResult;
+}
+
+BinaryBlock arrFromSeed(const tesla::crypto::ByteBuffer& vecSeed)
+{
+    if (vecSeed.size() != BINARY_BLOCK_SIZE)
+    {
+        throw std::runtime_error("Integration-test sender seed has an invalid size");
+    }
+
+    BinaryBlock arrResult{};
+    std::copy(vecSeed.begin(), vecSeed.end(), arrResult.begin());
+    return arrResult;
+}
+
+AuthenticationRoundControlParameters prmCreateControlRound(
+    const tesla::core::AuthenticationRoundParameters& prmRound
+)
+{
+    return AuthenticationRoundControlParameters(
+        AuthenticationCryptoAlgorithm::Sha256,
+        UdpAuthenticationMode::Native,
+        prmRound.u32TotalPacketCount(),
+        prmRound.u32PacketsPerInterval(),
+        prmRound.u32DisclosureDelay(),
+        prmRound.u32IntervalMilliseconds(),
+        prmRound.u64StartTimestampMilliseconds(),
+        prmRound.u32ChainLength()
+    );
+}
+
+SenderAuthenticationConfigControlDetails detCreateSenderConfig(
+    const std::string& strRequestId,
+    const tesla::core::SenderAuthenticationMaterial& matMaterial,
+    BinaryBlock arrCommitmentKey
+)
+{
+    return SenderAuthenticationConfigControlDetails(
+        strRequestId,
+        matMaterial.strSenderId(),
+        matMaterial.u64ChainId(),
+        arrFromSeed(matMaterial.vecChainSeed()),
+        std::move(arrCommitmentKey),
+        prmCreateControlRound(matMaterial.prmRoundParameters())
+    );
+}
+
+ReceiverAuthenticationContextControlDetails detCreateReceiverContext(
+    const tesla::core::SenderAuthenticationMaterial& matMaterial,
+    const std::string& strSenderIpAddress
+)
+{
+    return ReceiverAuthenticationContextControlDetails(
+        matMaterial.strSenderId(),
+        strSenderIpAddress,
+        matMaterial.u64ChainId(),
+        arrFromDigest(matMaterial.digCommitmentKey()),
+        prmCreateControlRound(matMaterial.prmRoundParameters())
+    );
+}
+
+bool bAcknowledgementAccepted(
+    const NodeControlMessage& msgMessage,
+    AuthenticationConfigTarget targetConfig
+)
+{
+    if (msgMessage.typeMessage()
+        != NodeControlMessageType::AuthenticationConfigAcknowledgement)
+    {
+        return false;
+    }
+
+    const AuthenticationConfigAcknowledgementControlDetails& detAcknowledgement =
+        std::get<AuthenticationConfigAcknowledgementControlDetails>(
+            msgMessage.varDetails()
+        );
+    return detAcknowledgement.bAccepted()
+        && detAcknowledgement.targetConfig() == targetConfig;
 }
 
 bool bCheckTcpNode(
@@ -395,6 +551,171 @@ bool bTestTwoNodeNetwork()
     bPassed = bCheckTcpNode("127.0.0.2", u16ManagementPort, "UAV-102") && bPassed;
     bPassed = bCheckTcpNode("127.0.0.3", u16ManagementPort, "UAV-103") && bPassed;
 
+    const tesla::crypto::OpenSslSecureRandomProvider rngProvider;
+    tesla::core::AuthenticationAuthority autAuthority(rngProvider);
+    const tesla::core::AuthenticationRoundParameters prmRound(
+        tesla::crypto::CryptoAlgorithm::Sha256,
+        tesla::core::TeslaAuthenticationMode::Native,
+        8,
+        2,
+        1,
+        100,
+        1'700'000'000'000ULL
+    );
+    const tesla::core::SenderAuthenticationMaterial matNodeOne =
+        autAuthority.matIssueSenderMaterial("UAV-102", prmRound);
+    const tesla::core::SenderAuthenticationMaterial matNodeTwo =
+        autAuthority.matIssueSenderMaterial("UAV-103", prmRound);
+
+    const NodeControlMessage msgNodeOneSenderResponse = msgExchangeControl(
+        "127.0.0.2",
+        u16ManagementPort,
+        TcpClientRole::Manager,
+        NodeControlMessage(detCreateSenderConfig(
+            "sender-uav-102",
+            matNodeOne,
+            arrFromDigest(matNodeOne.digCommitmentKey())
+        ))
+    );
+    const NodeControlMessage msgNodeTwoSenderResponse = msgExchangeControl(
+        "127.0.0.3",
+        u16ManagementPort,
+        TcpClientRole::Manager,
+        NodeControlMessage(detCreateSenderConfig(
+            "sender-uav-103",
+            matNodeTwo,
+            arrFromDigest(matNodeTwo.digCommitmentKey())
+        ))
+    );
+    bPassed = bAcknowledgementAccepted(
+        msgNodeOneSenderResponse,
+        AuthenticationConfigTarget::Sender
+    ) && bPassed;
+    bPassed = bAcknowledgementAccepted(
+        msgNodeTwoSenderResponse,
+        AuthenticationConfigTarget::Sender
+    ) && bPassed;
+
+    const NodeControlMessage msgReceiverResponse = msgExchangeControl(
+        "127.0.0.3",
+        u16ManagementPort,
+        TcpClientRole::Manager,
+        NodeControlMessage(ReceiverAuthenticationContextsControlDetails(
+            "receiver-uav-103",
+            {
+                detCreateReceiverContext(matNodeOne, "127.0.0.2"),
+                detCreateReceiverContext(matNodeTwo, "127.0.0.3")
+            }
+        ))
+    );
+    bPassed = bAcknowledgementAccepted(
+        msgReceiverResponse,
+        AuthenticationConfigTarget::Receiver
+    ) && bPassed;
+    bPassed = svcNodeOne.bHasSenderAuthenticationContext()
+        && svcNodeTwo.bHasSenderAuthenticationContext()
+        && svcNodeTwo.nReceiverAuthenticationContextCount() == 2
+        && bPassed;
+
+    const tesla::core::ReceiverAuthenticationContextLookupResult resKnownSender =
+        svcNodeTwo.resFindReceiverAuthenticationContext(
+            "127.0.0.2",
+            matNodeOne.u64ChainId()
+        );
+    const tesla::core::ReceiverAuthenticationContextLookupResult resUnknownSource =
+        svcNodeTwo.resFindReceiverAuthenticationContext(
+            "127.0.0.99",
+            matNodeOne.u64ChainId()
+        );
+    const tesla::core::ReceiverAuthenticationContextLookupResult resWrongSenderChain =
+        svcNodeTwo.resFindReceiverAuthenticationContext(
+            "127.0.0.2",
+            matNodeTwo.u64ChainId()
+        );
+    bPassed = std::holds_alternative<tesla::core::ReceiverAuthenticationContext>(
+        resKnownSender
+    ) && std::get<tesla::core::ReceiverAuthenticationContext>(
+        resKnownSender
+    ).strSenderId() == "UAV-102" && bPassed;
+    bPassed = std::get<tesla::core::ReceiverAuthenticationContextLookupError>(
+        resUnknownSource
+    ) == tesla::core::ReceiverAuthenticationContextLookupError::UnknownSourceIp
+        && bPassed;
+    bPassed = std::get<tesla::core::ReceiverAuthenticationContextLookupError>(
+        resWrongSenderChain
+    ) == tesla::core::ReceiverAuthenticationContextLookupError::UnknownChainId
+        && bPassed;
+
+    // 篡改K0的Sender配置必须被拒绝，并保留此前已经验证通过的链。
+    BinaryBlock arrTamperedCommitment = arrFromDigest(matNodeOne.digCommitmentKey());
+    arrTamperedCommitment[0] ^= 0x01;
+    const NodeControlMessage msgInvalidSenderResponse = msgExchangeControl(
+        "127.0.0.2",
+        u16ManagementPort,
+        TcpClientRole::Manager,
+        NodeControlMessage(detCreateSenderConfig(
+            "sender-uav-102-invalid",
+            matNodeOne,
+            arrTamperedCommitment
+        ))
+    );
+    const AuthenticationConfigAcknowledgementControlDetails& detInvalidSenderAck =
+        std::get<AuthenticationConfigAcknowledgementControlDetails>(
+            msgInvalidSenderResponse.varDetails()
+        );
+    bPassed = !detInvalidSenderAck.bAccepted()
+        && svcNodeOne.optSenderAuthenticationChainId().value_or(0)
+            == matNodeOne.u64ChainId()
+        && bPassed;
+
+    // 冲突IP映射的Receiver批量更新必须整体失败，旧的两个上下文继续可查。
+    const NodeControlMessage msgInvalidReceiverResponse = msgExchangeControl(
+        "127.0.0.3",
+        u16ManagementPort,
+        TcpClientRole::Manager,
+        NodeControlMessage(ReceiverAuthenticationContextsControlDetails(
+            "receiver-uav-103-invalid",
+            {
+                detCreateReceiverContext(matNodeOne, "127.0.0.2"),
+                detCreateReceiverContext(matNodeTwo, "127.0.0.2")
+            }
+        ))
+    );
+    const AuthenticationConfigAcknowledgementControlDetails& detInvalidReceiverAck =
+        std::get<AuthenticationConfigAcknowledgementControlDetails>(
+            msgInvalidReceiverResponse.varDetails()
+        );
+    bPassed = !detInvalidReceiverAck.bAccepted()
+        && svcNodeTwo.nReceiverAuthenticationContextCount() == 2
+        && std::holds_alternative<tesla::core::ReceiverAuthenticationContext>(
+            svcNodeTwo.resFindReceiverAuthenticationContext(
+                "127.0.0.2",
+                matNodeOne.u64ChainId()
+            )
+        )
+        && bPassed;
+
+    // MONITOR即使提交合法配置也只能获得拒绝确认，不能改变Sender状态。
+    const NodeControlMessage msgMonitorResponse = msgExchangeControl(
+        "127.0.0.2",
+        u16ManagementPort,
+        TcpClientRole::Monitor,
+        NodeControlMessage(detCreateSenderConfig(
+            "sender-uav-102-monitor",
+            matNodeOne,
+            arrFromDigest(matNodeOne.digCommitmentKey())
+        ))
+    );
+    const AuthenticationConfigAcknowledgementControlDetails& detMonitorAck =
+        std::get<AuthenticationConfigAcknowledgementControlDetails>(
+            msgMonitorResponse.varDetails()
+        );
+    bPassed = !detMonitorAck.bAccepted()
+        && detMonitorAck.strErrorCode() == "MONITOR_CONFIG_FORBIDDEN"
+        && svcNodeOne.optSenderAuthenticationChainId().value_or(0)
+            == matNodeOne.u64ChainId()
+        && bPassed;
+
     const UdpAuthenticationPacketContext ctxNative(
         UdpAuthenticationMode::Native,
         2,
@@ -442,12 +763,12 @@ int main()
     {
         if (!bTestTwoNodeNetwork())
         {
-            std::cerr << "FAILED: PC client and two NodeAgents did not complete phase 3 traffic."
+            std::cerr << "FAILED: Two NodeAgents did not complete phase 4 provisioning traffic."
                       << std::endl;
             return 1;
         }
 
-        std::cout << "PC client and two NodeAgents completed TCP, discovery, and multicast traffic."
+        std::cout << "Two NodeAgents completed phase 4 provisioning and network traffic."
                   << std::endl;
         return 0;
     }

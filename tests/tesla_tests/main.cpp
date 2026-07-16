@@ -1,5 +1,7 @@
+#include "tesla/core/AuthenticationAuthority.h"
 #include "tesla/core/AuthenticationGroupInput.h"
 #include "tesla/core/AuthenticationInputEncoder.h"
+#include "tesla/core/AuthenticationRoundParameters.h"
 #include "tesla/core/ImprovedAuthenticationDetails.h"
 #include "tesla/core/ImprovedTeslaStrategy.h"
 #include "tesla/core/ImprovedVerificationDetails.h"
@@ -7,17 +9,22 @@
 #include "tesla/core/NativePacketStatus.h"
 #include "tesla/core/NativeTeslaStrategy.h"
 #include "tesla/core/NativeVerificationDetails.h"
+#include "tesla/core/ReceiverAuthenticationContextStore.h"
+#include "tesla/core/SenderAuthenticationContext.h"
+#include "tesla/core/TeslaAuthenticationMode.h"
 #include "tesla/core/TeslaVerificationResult.h"
 #include "tesla/crypto/CryptoAlgorithm.h"
 #include "tesla/crypto/CryptoProvider.h"
 #include "tesla/crypto/CryptoTypes.h"
 #include "tesla/crypto/OpenSslCryptoProvider.h"
+#include "tesla/crypto/SecureRandomProvider.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <variant>
@@ -26,8 +33,10 @@
 namespace
 {
 using tesla::core::AuthenticationGroupInput;
+using tesla::core::AuthenticationAuthority;
 using tesla::core::AuthenticationInputEncoder;
 using tesla::core::AuthenticationPacketInput;
+using tesla::core::AuthenticationRoundParameters;
 using tesla::core::ImprovedAuthenticationDetails;
 using tesla::core::ImprovedTeslaStrategy;
 using tesla::core::ImprovedVerificationDetails;
@@ -36,6 +45,13 @@ using tesla::core::NativeAuthenticationDetails;
 using tesla::core::NativePacketStatus;
 using tesla::core::NativeTeslaStrategy;
 using tesla::core::NativeVerificationDetails;
+using tesla::core::ReceiverAuthenticationContext;
+using tesla::core::ReceiverAuthenticationContextLookupError;
+using tesla::core::ReceiverAuthenticationContextLookupResult;
+using tesla::core::ReceiverAuthenticationContextStore;
+using tesla::core::SenderAuthenticationContext;
+using tesla::core::SenderAuthenticationMaterial;
+using tesla::core::TeslaAuthenticationMode;
 using tesla::core::TeslaAuthenticationDetails;
 using tesla::core::TeslaVerificationResult;
 using tesla::crypto::ByteBuffer;
@@ -43,6 +59,37 @@ using tesla::crypto::CryptoAlgorithm;
 using tesla::crypto::CryptoProvider;
 using tesla::crypto::Digest;
 using tesla::crypto::OpenSslCryptoProvider;
+using tesla::crypto::SecureRandomProvider;
+
+// 注入确定性字节序列，稳定覆盖CA的chainId碰撞重试分支。
+class QueuedSecureRandomProvider final : public SecureRandomProvider
+{
+public:
+    explicit QueuedSecureRandomProvider(std::vector<ByteBuffer> vecOutputs)
+        : m_vecOutputs(std::move(vecOutputs))
+    {
+    }
+
+    ByteBuffer vecGenerateBytes(std::size_t nSize) const override
+    {
+        if (m_nNextOutput >= m_vecOutputs.size())
+        {
+            throw std::runtime_error("Deterministic random output queue is empty");
+        }
+
+        const ByteBuffer vecOutput = m_vecOutputs[m_nNextOutput++];
+        if (vecOutput.size() != nSize)
+        {
+            throw std::runtime_error("Deterministic random output size mismatch");
+        }
+
+        return vecOutput;
+    }
+
+private:
+    std::vector<ByteBuffer> m_vecOutputs;
+    mutable std::size_t     m_nNextOutput = 0;
+};
 
 // 统计密码调用次数，用于证明快速路径没有退化为逐包HMAC验证。
 class CountingCryptoProvider final : public CryptoProvider
@@ -438,6 +485,142 @@ bool bTestImprovedTailGroup()
             "Partial tail group fast path"
         );
 }
+
+// 验证CA独立签发、Sender本地K0自检，以及Receiver先按来源IP映射的事务上下文。
+bool bTestAuthenticationProvisioning()
+{
+    const ByteBuffer vecChainIdOne{0, 0, 0, 0, 0, 0, 0, 1};
+    const ByteBuffer vecChainIdTwo{0, 0, 0, 0, 0, 0, 0, 2};
+    const ByteBuffer vecSeedOne(32, 0x11);
+    const ByteBuffer vecSeedTwo(32, 0x22);
+    const QueuedSecureRandomProvider rngProvider({
+        vecChainIdOne,
+        vecSeedOne,
+        vecChainIdOne,
+        vecChainIdTwo,
+        vecSeedTwo
+    });
+    AuthenticationAuthority autAuthority(rngProvider);
+    const AuthenticationRoundParameters prmRound(
+        CryptoAlgorithm::Sha256,
+        TeslaAuthenticationMode::Native,
+        10,
+        4,
+        3,
+        100,
+        1'700'000'000'000ULL
+    );
+
+    SenderAuthenticationMaterial matOne = autAuthority.matIssueSenderMaterial(
+        "UAV-201",
+        prmRound
+    );
+    SenderAuthenticationMaterial matTwo = autAuthority.matIssueSenderMaterial(
+        "UAV-202",
+        prmRound
+    );
+
+    bool bPassed = bExpect(
+        prmRound.nDataIntervalCount() == 3 && prmRound.u32ChainLength() == 4,
+        "Key-chain length uses ceil(packetCount/packetsPerInterval)+1"
+    );
+    bPassed = bExpect(
+        matOne.u64ChainId() != matTwo.u64ChainId()
+            && matOne.vecChainSeed() != matTwo.vecChainSeed()
+            && matOne.digCommitmentKey() != matTwo.digCommitmentKey(),
+        "Different senders receive distinct chain ID, seed, and K0"
+    ) && bPassed;
+
+    const OpenSslCryptoProvider crpProvider(CryptoAlgorithm::Sha256);
+    const SenderAuthenticationContext ctxSender =
+        SenderAuthenticationContext::ctxCreateVerified(matOne, crpProvider);
+    bPassed = bExpect(
+        ctxSender.keyChain().nDataIntervalCount() == 3,
+        "Sender rebuilds the complete configured key chain"
+    ) && bPassed;
+
+    Digest digTamperedCommitment = matOne.digCommitmentKey();
+    digTamperedCommitment[0] ^= 0x01;
+    bool bRejectedTamperedCommitment = false;
+    try
+    {
+        static_cast<void>(SenderAuthenticationContext::ctxCreateVerified(
+            SenderAuthenticationMaterial(
+                matOne.strSenderId(),
+                matOne.u64ChainId(),
+                matOne.vecChainSeed(),
+                digTamperedCommitment,
+                matOne.prmRoundParameters()
+            ),
+            crpProvider
+        ));
+    }
+    catch (const std::invalid_argument&)
+    {
+        bRejectedTamperedCommitment = true;
+    }
+    bPassed = bExpect(
+        bRejectedTamperedCommitment,
+        "Sender rejects a supplied K0 that does not match the rebuilt chain"
+    ) && bPassed;
+
+    ReceiverAuthenticationContextStore stoContexts;
+    const ReceiverAuthenticationContext ctxOne =
+        autAuthority.ctxCreateReceiverContext(matOne, "127.0.0.21");
+    const ReceiverAuthenticationContext ctxTwo =
+        autAuthority.ctxCreateReceiverContext(matTwo, "127.0.0.22");
+    stoContexts.replaceAll({ctxOne, ctxTwo});
+
+    const ReceiverAuthenticationContextLookupResult resKnown = stoContexts.resFind(
+        "127.0.0.21",
+        matOne.u64ChainId()
+    );
+    const ReceiverAuthenticationContextLookupResult resUnknownSource =
+        stoContexts.resFind("127.0.0.99", matOne.u64ChainId());
+    const ReceiverAuthenticationContextLookupResult resWrongChain =
+        stoContexts.resFind("127.0.0.21", matTwo.u64ChainId());
+
+    bPassed = bExpect(
+        std::holds_alternative<ReceiverAuthenticationContext>(resKnown)
+            && std::get<ReceiverAuthenticationContext>(resKnown).strSenderId()
+                == matOne.strSenderId(),
+        "Receiver resolves sender context from trusted source IP and chain ID"
+    ) && bPassed;
+    bPassed = bExpect(
+        std::get<ReceiverAuthenticationContextLookupError>(resUnknownSource)
+            == ReceiverAuthenticationContextLookupError::UnknownSourceIp,
+        "Receiver rejects an unknown source IP before chain lookup"
+    ) && bPassed;
+    bPassed = bExpect(
+        std::get<ReceiverAuthenticationContextLookupError>(resWrongChain)
+            == ReceiverAuthenticationContextLookupError::UnknownChainId,
+        "Receiver does not accept another sender's chain ID for a trusted IP"
+    ) && bPassed;
+
+    bool bRejectedConflictingMapping = false;
+    try
+    {
+        stoContexts.replaceAll({
+            ctxOne,
+            autAuthority.ctxCreateReceiverContext(matTwo, "127.0.0.21")
+        });
+    }
+    catch (const std::invalid_argument&)
+    {
+        bRejectedConflictingMapping = true;
+    }
+
+    bPassed = bExpect(
+        bRejectedConflictingMapping
+            && stoContexts.nSize() == 2
+            && std::holds_alternative<ReceiverAuthenticationContext>(
+                stoContexts.resFind("127.0.0.21", matOne.u64ChainId())
+            ),
+        "Rejected receiver update preserves the previous complete context set"
+    ) && bPassed;
+
+    return bPassed;
+}
 }
 
 int main()
@@ -457,6 +640,7 @@ int main()
 
     bPassed = bTestImprovedFallbacks() && bPassed;
     bPassed = bTestImprovedTailGroup() && bPassed;
+    bPassed = bTestAuthenticationProvisioning() && bPassed;
 
     if (!bPassed)
     {

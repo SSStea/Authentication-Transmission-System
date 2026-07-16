@@ -10,7 +10,7 @@ namespace tesla::protocol
 {
 using NodeControlDecodeResult = std::variant<NodeControlMessage, ProtocolDecodeError>;
 
-/** @brief 编解码TCP JSON控制帧内的阶段3握手、探活和状态消息。 */
+/** @brief 编解码TCP JSON控制帧内的握手、状态和认证配置消息。 */
 class NodeControlJsonCodec final
 {
 public:

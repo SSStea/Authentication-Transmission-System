@@ -170,6 +170,105 @@ bool bTestControlJsonMessages()
     return bPassed;
 }
 
+// 验证阶段4认证配置的强类型JSON、uint64无损编码和秘密字段隔离。
+bool bTestAuthenticationControlJson()
+{
+    const AuthenticationRoundControlParameters prmRound(
+        AuthenticationCryptoAlgorithm::Sha256,
+        UdpAuthenticationMode::Native,
+        10,
+        4,
+        3,
+        100,
+        1'700'000'000'000ULL,
+        4
+    );
+    const std::uint64_t u64LargeChainId = 0xFEDCBA9876543210ULL;
+    const NodeControlMessage msgSender(SenderAuthenticationConfigControlDetails(
+        "sender-config-1",
+        "UAV-301",
+        u64LargeChainId,
+        arrCreateBlock(0x10),
+        arrCreateBlock(0x80),
+        prmRound
+    ));
+    const std::string strSenderJson = NodeControlJsonCodec::strEncode(msgSender);
+    const NodeControlDecodeResult resSender = NodeControlJsonCodec::resDecode(strSenderJson);
+
+    bool bPassed = bExpect(
+        strSenderJson.find(R"("chainId":"fedcba9876543210")") != std::string::npos,
+        "Authentication chain ID is encoded as fixed 16-character hex"
+    );
+    bPassed = bExpect(
+        std::holds_alternative<NodeControlMessage>(resSender)
+            && std::get<SenderAuthenticationConfigControlDetails>(
+                std::get<NodeControlMessage>(resSender).varDetails()
+            ).u64ChainId() == u64LargeChainId,
+        "Large uint64 chain ID survives control JSON round trip"
+    ) && bPassed;
+
+    const NodeControlMessage msgReceiver(
+        ReceiverAuthenticationContextsControlDetails(
+            "receiver-config-1",
+            {
+                ReceiverAuthenticationContextControlDetails(
+                    "UAV-301",
+                    "127.0.0.31",
+                    u64LargeChainId,
+                    arrCreateBlock(0x80),
+                    prmRound
+                )
+            }
+        )
+    );
+    const std::string strReceiverJson = NodeControlJsonCodec::strEncode(msgReceiver);
+    const NodeControlDecodeResult resReceiver = NodeControlJsonCodec::resDecode(
+        strReceiverJson
+    );
+    bPassed = bExpect(
+        strReceiverJson.find("chainSeed") == std::string::npos
+            && std::holds_alternative<NodeControlMessage>(resReceiver),
+        "Receiver control JSON contains no key-chain seed"
+    ) && bPassed;
+
+    const NodeControlMessage msgAcknowledgement(
+        AuthenticationConfigAcknowledgementControlDetails(
+            "sender-config-1",
+            AuthenticationConfigTarget::Sender,
+            true,
+            "",
+            "accepted"
+        )
+    );
+    const NodeControlDecodeResult resAcknowledgement = NodeControlJsonCodec::resDecode(
+        NodeControlJsonCodec::strEncode(msgAcknowledgement)
+    );
+    bPassed = bExpect(
+        std::holds_alternative<NodeControlMessage>(resAcknowledgement)
+            && std::get<NodeControlMessage>(resAcknowledgement).typeMessage()
+                == NodeControlMessageType::AuthenticationConfigAcknowledgement,
+        "Authentication configuration acknowledgement round trip"
+    ) && bPassed;
+
+    const NodeControlDecodeResult resNumericChainId = NodeControlJsonCodec::resDecode(
+        R"({"type":"SENDER_AUTH_CONFIG","requestId":"bad","senderId":"UAV-301","chainId":18446744073709551615,"chainSeed":"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff","commitmentKey":"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff","round":{"cryptoAlgorithm":"SHA256","authMode":"NATIVE","totalPacketCount":10,"packetsPerInterval":4,"disclosureDelay":3,"intervalMs":100,"startTimestampMs":1700000000000,"chainLength":4}})"
+    );
+    bPassed = bExpect(
+        std::holds_alternative<ProtocolDecodeError>(resNumericChainId),
+        "Numeric chain ID is rejected to prevent JSON precision loss"
+    ) && bPassed;
+
+    const NodeControlDecodeResult resReceiverSecret = NodeControlJsonCodec::resDecode(
+        R"({"type":"RECEIVER_AUTH_CONTEXTS","requestId":"bad-secret","contexts":[{"senderId":"UAV-301","senderIp":"127.0.0.31","chainId":"fedcba9876543210","chainSeed":"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff","commitmentKey":"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff","round":{"cryptoAlgorithm":"SHA256","authMode":"NATIVE","totalPacketCount":10,"packetsPerInterval":4,"disclosureDelay":3,"intervalMs":100,"startTimestampMs":1700000000000,"chainLength":4}}]})"
+    );
+    bPassed = bExpect(
+        std::holds_alternative<ProtocolDecodeError>(resReceiverSecret),
+        "Receiver control JSON explicitly rejects a leaked chain seed"
+    ) && bPassed;
+
+    return bPassed;
+}
+
 bool bTestNativeUdpPackets()
 {
     // 原生模式分别验证无披露Key和间隔首包携带Key的两种固定长度。
@@ -397,6 +496,7 @@ int main()
     bPassed = bTestTcpFrameRoundTrips() && bPassed;
     bPassed = bTestTcpStreamSegmentation() && bPassed;
     bPassed = bTestControlJsonMessages() && bPassed;
+    bPassed = bTestAuthenticationControlJson() && bPassed;
     bPassed = bTestNativeUdpPackets() && bPassed;
     bPassed = bTestImprovedAndDisclosurePackets() && bPassed;
     bPassed = bTestContextSafetyLimits() && bPassed;

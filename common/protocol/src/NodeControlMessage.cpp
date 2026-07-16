@@ -148,6 +148,23 @@ NodeControlMessageType NodeControlMessage::typeMessage() const noexcept
         return NodeControlMessageType::StatusResponse;
     }
 
+    if (std::holds_alternative<SenderAuthenticationConfigControlDetails>(m_varDetails))
+    {
+        return NodeControlMessageType::SenderAuthenticationConfig;
+    }
+
+    if (std::holds_alternative<ReceiverAuthenticationContextsControlDetails>(m_varDetails))
+    {
+        return NodeControlMessageType::ReceiverAuthenticationContexts;
+    }
+
+    if (std::holds_alternative<AuthenticationConfigAcknowledgementControlDetails>(
+            m_varDetails
+        ))
+    {
+        return NodeControlMessageType::AuthenticationConfigAcknowledgement;
+    }
+
     return NodeControlMessageType::ErrorResponse;
 }
 
