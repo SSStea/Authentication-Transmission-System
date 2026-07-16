@@ -1,0 +1,46 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-vs2022-review",
+      "displayName": "Windows VS2022 Review Solution",
+      "description": "Generate the review-friendly Visual Studio solution with GUI applications and tests.",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/windows-review",
+      "cacheVariables": {
+        "BUILD_GUI": "ON",
+        "BUILD_TESTING": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-vs2022-review-release",
+      "displayName": "Build VS2022 Review Solution (Release)",
+      "configurePreset": "windows-vs2022-review",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-vs2022-review-release",
+      "displayName": "Test VS2022 Review Solution (Release)",
+      "configurePreset": "windows-vs2022-review",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

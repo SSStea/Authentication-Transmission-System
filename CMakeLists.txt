@@ -3,10 +3,24 @@ cmake_minimum_required(VERSION 3.24)
 project(AuthenticationTransmissionSystem VERSION 0.1.0 LANGUAGES CXX)
 
 option(BUILD_GUI "Build the four Qt GUI applications" ON)
+option(BUILD_TESTING "Build the automated test executables" ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# MSVC defaults to the system code page, so explicitly compile UTF-8 source comments.
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
+# Keep generated Visual Studio solutions focused on reviewable product targets.
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMake")
+
+if(BUILD_TESTING)
+    enable_testing()
+endif()
 
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
@@ -31,4 +45,6 @@ if(BUILD_GUI)
     add_subdirectory(apps/attack_test_gui)
 endif()
 
-add_subdirectory(tests)
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
