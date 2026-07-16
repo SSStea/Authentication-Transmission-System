@@ -1,0 +1,3 @@
+add_library(tesla_protocol INTERFACE)
+
+target_compile_features(tesla_protocol INTERFACE cxx_std_17)

@@ -1,0 +1,4 @@
+add_subdirectory(protocol_tests)
+add_subdirectory(crypto_tests)
+add_subdirectory(tesla_tests)
+add_subdirectory(integration_tests)

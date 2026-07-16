@@ -1,0 +1,4 @@
+add_library(tesla_workload INTERFACE)
+
+target_compile_features(tesla_workload INTERFACE cxx_std_17)
+target_link_libraries(tesla_workload INTERFACE tesla_crypto)
