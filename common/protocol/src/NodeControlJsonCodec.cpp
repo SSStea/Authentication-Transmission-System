@@ -2,7 +2,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cctype>
 #include <exception>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -50,6 +52,18 @@ const char* pTypeName(NodeControlMessageType typeMessage)
         return "ROUND_COMMAND_ACK";
     case NodeControlMessageType::RoundResult:
         return "ROUND_RESULT";
+    case NodeControlMessageType::PacketObservationEvent:
+        return "PACKET_OBSERVATION_EVENT";
+    case NodeControlMessageType::PacketFailureEvent:
+        return "PACKET_FAILURE_EVENT";
+    case NodeControlMessageType::ImprovedGroupObservationEvent:
+        return "IMPROVED_GROUP_OBSERVATION_EVENT";
+    case NodeControlMessageType::DosSummaryEvent:
+        return "DOS_SUMMARY_EVENT";
+    case NodeControlMessageType::AbnormalEventSnapshotRequest:
+        return "ABNORMAL_EVENT_SNAPSHOT_REQUEST";
+    case NodeControlMessageType::AbnormalEventSnapshot:
+        return "ABNORMAL_EVENT_SNAPSHOT";
     case NodeControlMessageType::ErrorResponse:
         return "ERROR";
     }
@@ -348,6 +362,582 @@ AuthenticationRoundResultStatus statusResultParse(const std::string& strStatus)
     throw std::invalid_argument("Unknown authentication round result status");
 }
 
+const char* pObservationDirectionName(PacketObservationDirection dirDirection)
+{
+    return dirDirection == PacketObservationDirection::Tx ? "TX" : "RX";
+}
+
+PacketObservationDirection dirObservationParse(const std::string& strDirection)
+{
+    if (strDirection == "TX")
+    {
+        return PacketObservationDirection::Tx;
+    }
+
+    if (strDirection == "RX")
+    {
+        return PacketObservationDirection::Rx;
+    }
+
+    throw std::invalid_argument("Unknown packet observation direction");
+}
+
+const char* pSourceTypeName(PacketSourceType typeSource)
+{
+    switch (typeSource)
+    {
+    case PacketSourceType::NormalSender:
+        return "NORMAL_SENDER";
+    case PacketSourceType::AttackInjection:
+        return "ATTACK_INJECTION";
+    case PacketSourceType::UnknownSource:
+        return "UNKNOWN_SOURCE";
+    }
+
+    throw std::invalid_argument("Unknown packet source type");
+}
+
+PacketSourceType typeSourceParse(const std::string& strSource)
+{
+    if (strSource == "NORMAL_SENDER")
+    {
+        return PacketSourceType::NormalSender;
+    }
+
+    if (strSource == "ATTACK_INJECTION")
+    {
+        return PacketSourceType::AttackInjection;
+    }
+
+    if (strSource == "UNKNOWN_SOURCE")
+    {
+        return PacketSourceType::UnknownSource;
+    }
+
+    throw std::invalid_argument("Unknown packet source type");
+}
+
+const char* pPacketStatusName(PacketAuthenticationStatus statusAuthentication)
+{
+    switch (statusAuthentication)
+    {
+    case PacketAuthenticationStatus::Generated:
+        return "GENERATED";
+    case PacketAuthenticationStatus::Pending:
+        return "PENDING";
+    case PacketAuthenticationStatus::Passed:
+        return "PASS";
+    case PacketAuthenticationStatus::Failed:
+        return "FAIL";
+    }
+
+    throw std::invalid_argument("Unknown packet authentication status");
+}
+
+PacketAuthenticationStatus statusPacketParse(const std::string& strStatus)
+{
+    if (strStatus == "GENERATED")
+    {
+        return PacketAuthenticationStatus::Generated;
+    }
+
+    if (strStatus == "PENDING")
+    {
+        return PacketAuthenticationStatus::Pending;
+    }
+
+    if (strStatus == "PASS")
+    {
+        return PacketAuthenticationStatus::Passed;
+    }
+
+    if (strStatus == "FAIL")
+    {
+        return PacketAuthenticationStatus::Failed;
+    }
+
+    throw std::invalid_argument("Unknown packet authentication status");
+}
+
+const char* pFailureTypeName(AuthenticationFailureType typeFailure)
+{
+    switch (typeFailure)
+    {
+    case AuthenticationFailureType::MacFailed:
+        return "MAC_FAILED";
+    case AuthenticationFailureType::TamperedVariant:
+        return "TAMPERED_VARIANT";
+    case AuthenticationFailureType::FastGroupFailed:
+        return "FAST_GROUP_FAILED";
+    case AuthenticationFailureType::GroupTauFailed:
+        return "GROUP_TAU_FAILED";
+    case AuthenticationFailureType::DetectionThresholdExceeded:
+        return "DETECTION_THRESHOLD_EXCEEDED";
+    case AuthenticationFailureType::ReplayDuplicate:
+        return "REPLAY_DUPLICATE";
+    case AuthenticationFailureType::ReplayLate:
+        return "REPLAY_LATE";
+    case AuthenticationFailureType::ReplayExpiredChain:
+        return "REPLAY_EXPIRED_CHAIN";
+    case AuthenticationFailureType::MissingPacket:
+        return "MISSING_PACKET";
+    case AuthenticationFailureType::IncompleteGroupTags:
+        return "INCOMPLETE_GROUP_TAGS";
+    case AuthenticationFailureType::UnverifiableMissingBaseline:
+        return "UNVERIFIABLE_MISSING_BASELINE";
+    case AuthenticationFailureType::UnknownContext:
+        return "UNKNOWN_CONTEXT";
+    case AuthenticationFailureType::ProtocolError:
+        return "PROTOCOL_ERROR";
+    case AuthenticationFailureType::InvalidSchedulingOverrun:
+        return "INVALID_SCHEDULING_OVERRUN";
+    case AuthenticationFailureType::AbnormalRecordLimitReached:
+        return "ABNORMAL_RECORD_LIMIT_REACHED";
+    }
+
+    throw std::invalid_argument("Unknown authentication failure type");
+}
+
+AuthenticationFailureType typeFailureParse(const std::string& strFailure)
+{
+    static const std::vector<std::pair<std::string, AuthenticationFailureType>>
+        vecMappings{
+            {"MAC_FAILED", AuthenticationFailureType::MacFailed},
+            {"TAMPERED_VARIANT", AuthenticationFailureType::TamperedVariant},
+            {"FAST_GROUP_FAILED", AuthenticationFailureType::FastGroupFailed},
+            {"GROUP_TAU_FAILED", AuthenticationFailureType::GroupTauFailed},
+            {"DETECTION_THRESHOLD_EXCEEDED", AuthenticationFailureType::DetectionThresholdExceeded},
+            {"REPLAY_DUPLICATE", AuthenticationFailureType::ReplayDuplicate},
+            {"REPLAY_LATE", AuthenticationFailureType::ReplayLate},
+            {"REPLAY_EXPIRED_CHAIN", AuthenticationFailureType::ReplayExpiredChain},
+            {"MISSING_PACKET", AuthenticationFailureType::MissingPacket},
+            {"INCOMPLETE_GROUP_TAGS", AuthenticationFailureType::IncompleteGroupTags},
+            {"UNVERIFIABLE_MISSING_BASELINE", AuthenticationFailureType::UnverifiableMissingBaseline},
+            {"UNKNOWN_CONTEXT", AuthenticationFailureType::UnknownContext},
+            {"PROTOCOL_ERROR", AuthenticationFailureType::ProtocolError},
+            {"INVALID_SCHEDULING_OVERRUN", AuthenticationFailureType::InvalidSchedulingOverrun},
+            {"ABNORMAL_RECORD_LIMIT_REACHED", AuthenticationFailureType::AbnormalRecordLimitReached}
+        };
+
+    for (const auto& prMapping : vecMappings)
+    {
+        if (prMapping.first == strFailure)
+        {
+            return prMapping.second;
+        }
+    }
+
+    throw std::invalid_argument("Unknown authentication failure type");
+}
+
+const char* pSeverityName(ObservationSeverity sevSeverity)
+{
+    switch (sevSeverity)
+    {
+    case ObservationSeverity::Information:
+        return "INFO";
+    case ObservationSeverity::Warning:
+        return "WARNING";
+    case ObservationSeverity::Error:
+        return "ERROR";
+    }
+
+    throw std::invalid_argument("Unknown observation severity");
+}
+
+ObservationSeverity sevParse(const std::string& strSeverity)
+{
+    if (strSeverity == "INFO")
+    {
+        return ObservationSeverity::Information;
+    }
+
+    if (strSeverity == "WARNING")
+    {
+        return ObservationSeverity::Warning;
+    }
+
+    if (strSeverity == "ERROR")
+    {
+        return ObservationSeverity::Error;
+    }
+
+    throw std::invalid_argument("Unknown observation severity");
+}
+
+const char* pGroupPathName(GroupVerificationPath pathVerification)
+{
+    switch (pathVerification)
+    {
+    case GroupVerificationPath::FastGroupPass:
+        return "FAST_GROUP_PASS";
+    case GroupVerificationPath::KsRsFallback:
+        return "KS_RS_FALLBACK";
+    case GroupVerificationPath::IncompleteGroupTags:
+        return "INCOMPLETE_GROUP_TAGS";
+    }
+
+    throw std::invalid_argument("Unknown group verification path");
+}
+
+GroupVerificationPath pathGroupParse(const std::string& strPath)
+{
+    if (strPath == "FAST_GROUP_PASS")
+    {
+        return GroupVerificationPath::FastGroupPass;
+    }
+
+    if (strPath == "KS_RS_FALLBACK")
+    {
+        return GroupVerificationPath::KsRsFallback;
+    }
+
+    if (strPath == "INCOMPLETE_GROUP_TAGS")
+    {
+        return GroupVerificationPath::IncompleteGroupTags;
+    }
+
+    throw std::invalid_argument("Unknown group verification path");
+}
+
+std::string strEncodeBytes(const ByteBuffer& vecBytes)
+{
+    static constexpr char HEX_DIGITS[] = "0123456789abcdef";
+    std::string strHex;
+    strHex.resize(vecBytes.size() * 2U);
+
+    for (std::size_t nIndex = 0; nIndex < vecBytes.size(); ++nIndex)
+    {
+        strHex[nIndex * 2U] = HEX_DIGITS[(vecBytes[nIndex] >> 4U) & 0x0FU];
+        strHex[nIndex * 2U + 1U] = HEX_DIGITS[vecBytes[nIndex] & 0x0FU];
+    }
+
+    return strHex;
+}
+
+std::uint8_t u8DecodeHex(char chValue)
+{
+    if (chValue >= '0' && chValue <= '9')
+    {
+        return static_cast<std::uint8_t>(chValue - '0');
+    }
+
+    const char chLower = static_cast<char>(std::tolower(
+        static_cast<unsigned char>(chValue)
+    ));
+    if (chLower >= 'a' && chLower <= 'f')
+    {
+        return static_cast<std::uint8_t>(chLower - 'a' + 10);
+    }
+
+    throw std::invalid_argument("Hex text contains an invalid character");
+}
+
+ByteBuffer vecDecodeBytes(const std::string& strHex)
+{
+    constexpr std::size_t MAX_MONITOR_BYTE_COUNT = 65535;
+    if (strHex.empty()
+        || (strHex.size() % 2U) != 0
+        || strHex.size() / 2U > MAX_MONITOR_BYTE_COUNT)
+    {
+        throw std::invalid_argument("Monitor byte field has an invalid length");
+    }
+
+    ByteBuffer vecBytes(strHex.size() / 2U);
+    for (std::size_t nIndex = 0; nIndex < vecBytes.size(); ++nIndex)
+    {
+        vecBytes[nIndex] = static_cast<std::uint8_t>(
+            (u8DecodeHex(strHex[nIndex * 2U]) << 4U)
+            | u8DecodeHex(strHex[nIndex * 2U + 1U])
+        );
+    }
+
+    return vecBytes;
+}
+
+nlohmann::json jsnEncodePacketPayload(
+    const PacketPayloadObservationDetails& varPayload
+)
+{
+    if (const auto* pDisclosure = std::get_if<
+            DisclosurePacketObservationDetails
+        >(&varPayload))
+    {
+        return {
+            {"type", "DISCLOSE"},
+            {"disclosedKey", AuthenticationControlValueCodec::strEncodeBlock(
+                pDisclosure->arrDisclosedKey()
+            )}
+        };
+    }
+
+    const DataPacketObservationDetails& detData = std::get<
+        DataPacketObservationDetails
+    >(varPayload);
+    nlohmann::json jsnPayload{
+        {"type", "DATA"},
+        {"message", AuthenticationControlValueCodec::strEncodeBlock(
+            detData.arrMessage()
+        )}
+    };
+    if (detData.optDisclosedKey().has_value())
+    {
+        jsnPayload["disclosedKey"] =
+            AuthenticationControlValueCodec::strEncodeBlock(
+                detData.optDisclosedKey().value()
+            );
+    }
+
+    if (const auto* pNative = std::get_if<NativePacketObservationDetails>(
+            &detData.varModeDetails()
+        ))
+    {
+        jsnPayload["modeDetails"] = {
+            {"type", "NATIVE"},
+            {"packetMac", AuthenticationControlValueCodec::strEncodeBlock(
+                pNative->arrPacketMac()
+            )}
+        };
+    }
+    else
+    {
+        const ImprovedPacketObservationDetails& detImproved = std::get<
+            ImprovedPacketObservationDetails
+        >(detData.varModeDetails());
+        nlohmann::json jsnTau = nlohmann::json::array();
+        for (const BinaryBlock& arrTau : detImproved.vecSamdTau())
+        {
+            jsnTau.push_back(
+                AuthenticationControlValueCodec::strEncodeBlock(arrTau)
+            );
+        }
+        jsnPayload["modeDetails"] = {
+            {"type", "IMPROVED"},
+            {"samdTau", std::move(jsnTau)}
+        };
+        if (detImproved.optFastGroupTag().has_value())
+        {
+            jsnPayload["modeDetails"]["fastGroupTag"] =
+                AuthenticationControlValueCodec::strEncodeBlock(
+                    detImproved.optFastGroupTag().value()
+                );
+        }
+    }
+
+    return jsnPayload;
+}
+
+PacketPayloadObservationDetails varDecodePacketPayload(
+    const nlohmann::json& jsnPayload
+)
+{
+    const std::string strType = jsnPayload.at("type").get<std::string>();
+    if (strType == "DISCLOSE")
+    {
+        return DisclosurePacketObservationDetails(
+            AuthenticationControlValueCodec::arrDecodeBlock(
+                jsnPayload.at("disclosedKey").get<std::string>()
+            )
+        );
+    }
+
+    if (strType != "DATA")
+    {
+        throw std::invalid_argument("Unknown observed packet payload type");
+    }
+
+    std::optional<BinaryBlock> optDisclosedKey;
+    if (jsnPayload.contains("disclosedKey"))
+    {
+        optDisclosedKey = AuthenticationControlValueCodec::arrDecodeBlock(
+            jsnPayload.at("disclosedKey").get<std::string>()
+        );
+    }
+
+    const nlohmann::json& jsnMode = jsnPayload.at("modeDetails");
+    PacketModeObservationDetails varMode = NativePacketObservationDetails(
+        BinaryBlock{}
+    );
+    const std::string strMode = jsnMode.at("type").get<std::string>();
+    if (strMode == "NATIVE")
+    {
+        varMode = NativePacketObservationDetails(
+            AuthenticationControlValueCodec::arrDecodeBlock(
+                jsnMode.at("packetMac").get<std::string>()
+            )
+        );
+    }
+    else if (strMode == "IMPROVED")
+    {
+        std::vector<BinaryBlock> vecTau;
+        for (const nlohmann::json& jsnTau : jsnMode.at("samdTau"))
+        {
+            vecTau.push_back(AuthenticationControlValueCodec::arrDecodeBlock(
+                jsnTau.get<std::string>()
+            ));
+        }
+        std::optional<BinaryBlock> optFastGroupTag;
+        if (jsnMode.contains("fastGroupTag"))
+        {
+            optFastGroupTag = AuthenticationControlValueCodec::arrDecodeBlock(
+                jsnMode.at("fastGroupTag").get<std::string>()
+            );
+        }
+        varMode = ImprovedPacketObservationDetails(
+            std::move(vecTau),
+            std::move(optFastGroupTag)
+        );
+    }
+    else
+    {
+        throw std::invalid_argument("Unknown observed packet mode details");
+    }
+
+    return DataPacketObservationDetails(
+        AuthenticationControlValueCodec::arrDecodeBlock(
+            jsnPayload.at("message").get<std::string>()
+        ),
+        std::move(optDisclosedKey),
+        std::move(varMode)
+    );
+}
+
+// 实时事件和重连快照共用同一份报文JSON映射，避免两条协议路径逐渐产生字段差异。
+nlohmann::json jsnEncodeObservedPacket(
+    const PacketObservationControlDetails& detPacket
+)
+{
+    return {
+        {"eventId", detPacket.u64EventId()},
+        {"timestampMs", detPacket.u64TimestampMilliseconds()},
+        {"roundId", detPacket.strRoundId()},
+        {"senderId", detPacket.strSenderId()},
+        {"senderIp", detPacket.strSenderIp()},
+        {"actualSourceIp", detPacket.strActualSourceIp()},
+        {"peer", detPacket.strPeer()},
+        {"direction", pObservationDirectionName(detPacket.dirDirection())},
+        {"sourceType", pSourceTypeName(detPacket.typeSource())},
+        {"chainId", AuthenticationControlValueCodec::strEncodeChainId(
+            detPacket.u64ChainId()
+        )},
+        {"intervalIndex", detPacket.u32IntervalIndex()},
+        {"packetIndex", detPacket.u32PacketIndex()},
+        {"packetsPerInterval", detPacket.u32PacketsPerInterval()},
+        {"disclosureDelay", detPacket.u32DisclosureDelay()},
+        {"cryptoAlgorithm", pAlgorithmName(detPacket.algCryptoAlgorithm())},
+        {"authMode", pAuthenticationModeName(
+            detPacket.modeAuthentication()
+        )},
+        {"status", pPacketStatusName(detPacket.statusAuthentication())},
+        {"candidateHash", detPacket.strCandidateHash()},
+        {"duplicateCount", detPacket.u32DuplicateCount()},
+        {"reason", detPacket.strReason()},
+        {"payloadDetails", jsnEncodePacketPayload(
+            detPacket.varPayloadDetails()
+        )},
+        {"rawDatagram", strEncodeBytes(detPacket.vecRawDatagram())}
+    };
+}
+
+PacketObservationControlDetails detDecodeObservedPacket(
+    const nlohmann::json& jsnPacket
+)
+{
+    return PacketObservationControlDetails(
+        jsnPacket.at("eventId").get<std::uint64_t>(),
+        jsnPacket.at("timestampMs").get<std::uint64_t>(),
+        jsnPacket.at("roundId").get<std::string>(),
+        jsnPacket.at("senderId").get<std::string>(),
+        jsnPacket.value("senderIp", std::string()),
+        jsnPacket.value("actualSourceIp", std::string()),
+        jsnPacket.at("peer").get<std::string>(),
+        dirObservationParse(jsnPacket.at("direction").get<std::string>()),
+        typeSourceParse(jsnPacket.at("sourceType").get<std::string>()),
+        AuthenticationControlValueCodec::u64DecodeChainId(
+            jsnPacket.at("chainId").get<std::string>()
+        ),
+        jsnPacket.at("intervalIndex").get<std::uint32_t>(),
+        jsnPacket.at("packetIndex").get<std::uint32_t>(),
+        jsnPacket.at("packetsPerInterval").get<std::uint32_t>(),
+        jsnPacket.at("disclosureDelay").get<std::uint32_t>(),
+        algParse(jsnPacket.at("cryptoAlgorithm").get<std::string>()),
+        modeAuthenticationParse(jsnPacket.at("authMode").get<std::string>()),
+        statusPacketParse(jsnPacket.at("status").get<std::string>()),
+        jsnPacket.at("candidateHash").get<std::string>(),
+        jsnPacket.at("duplicateCount").get<std::uint32_t>(),
+        jsnPacket.value("reason", std::string()),
+        varDecodePacketPayload(jsnPacket.at("payloadDetails")),
+        vecDecodeBytes(jsnPacket.at("rawDatagram").get<std::string>())
+    );
+}
+
+nlohmann::json jsnEncodeFailure(const PacketFailureControlDetails& detFailure)
+{
+    nlohmann::json jsnFailure{
+        {"eventId", detFailure.u64EventId()},
+        {"packetEventId", detFailure.u64PacketEventId()},
+        {"timestampMs", detFailure.u64TimestampMilliseconds()},
+        {"severity", pSeverityName(detFailure.sevSeverity())},
+        {"failureType", pFailureTypeName(detFailure.typeFailure())},
+        {"roundId", detFailure.strRoundId()},
+        {"senderId", detFailure.strSenderId()},
+        {"senderIp", detFailure.strSenderIp()},
+        {"actualSourceIp", detFailure.strActualSourceIp()},
+        {"chainId", AuthenticationControlValueCodec::strEncodeChainId(
+            detFailure.u64ChainId()
+        )},
+        {"intervalIndex", detFailure.u32IntervalIndex()},
+        {"packetIndex", detFailure.u32PacketIndex()},
+        {"candidateHash", detFailure.strCandidateHash()},
+        {"reason", detFailure.strReason()},
+        {"receivedTagDigest", detFailure.strReceivedTagDigest()},
+        {"calculatedTagDigest", detFailure.strCalculatedTagDigest()},
+        {"locatedPacketIndexes", detFailure.vecLocatedPacketIndexes()},
+        {"duplicateCount", detFailure.u32DuplicateCount()}
+    };
+    if (detFailure.optGroupIndex().has_value())
+    {
+        jsnFailure["groupIndex"] = detFailure.optGroupIndex().value();
+    }
+    return jsnFailure;
+}
+
+PacketFailureControlDetails detDecodeFailure(const nlohmann::json& jsnFailure)
+{
+    std::optional<std::uint32_t> optGroupIndex;
+    if (jsnFailure.contains("groupIndex"))
+    {
+        optGroupIndex = jsnFailure.at("groupIndex").get<std::uint32_t>();
+    }
+
+    return PacketFailureControlDetails(
+        jsnFailure.at("eventId").get<std::uint64_t>(),
+        jsnFailure.value("packetEventId", static_cast<std::uint64_t>(0)),
+        jsnFailure.at("timestampMs").get<std::uint64_t>(),
+        sevParse(jsnFailure.at("severity").get<std::string>()),
+        typeFailureParse(jsnFailure.at("failureType").get<std::string>()),
+        jsnFailure.value("roundId", std::string()),
+        jsnFailure.value("senderId", std::string()),
+        jsnFailure.value("senderIp", std::string()),
+        jsnFailure.value("actualSourceIp", std::string()),
+        AuthenticationControlValueCodec::u64DecodeChainId(
+            jsnFailure.value("chainId", std::string("0000000000000000"))
+        ),
+        jsnFailure.value("intervalIndex", static_cast<std::uint32_t>(0)),
+        jsnFailure.value("packetIndex", static_cast<std::uint32_t>(0)),
+        std::move(optGroupIndex),
+        jsnFailure.value("candidateHash", std::string()),
+        jsnFailure.at("reason").get<std::string>(),
+        jsnFailure.value("receivedTagDigest", std::string()),
+        jsnFailure.value("calculatedTagDigest", std::string()),
+        jsnFailure.value(
+            "locatedPacketIndexes",
+            std::vector<std::uint32_t>()
+        ),
+        jsnFailure.value("duplicateCount", static_cast<std::uint32_t>(1))
+    );
+}
+
 nlohmann::json jsnEncodeReceiverPayload(
     const ReceiverPayloadControlDetails& varPayloadDetails
 )
@@ -585,7 +1175,9 @@ std::string NodeControlJsonCodec::strEncode(const NodeControlMessage& msgMessage
     }
     else if (msgMessage.typeMessage() == NodeControlMessageType::Ping
         || msgMessage.typeMessage() == NodeControlMessageType::Pong
-        || msgMessage.typeMessage() == NodeControlMessageType::StatusRequest)
+        || msgMessage.typeMessage() == NodeControlMessageType::StatusRequest
+        || msgMessage.typeMessage()
+            == NodeControlMessageType::AbnormalEventSnapshotRequest)
     {
         jsnMessage["requestId"] = std::get<RequestControlDetails>(
             msgMessage.varDetails()
@@ -758,6 +1350,98 @@ std::string NodeControlJsonCodec::strEncode(const NodeControlMessage& msgMessage
         );
         jsnMessage["message"] = detResult.strMessage();
     }
+    else if (msgMessage.typeMessage()
+        == NodeControlMessageType::PacketObservationEvent)
+    {
+        const PacketObservationControlDetails& detPacket = std::get<
+            PacketObservationControlDetails
+        >(msgMessage.varDetails());
+        jsnMessage.update(jsnEncodeObservedPacket(detPacket));
+    }
+    else if (msgMessage.typeMessage()
+        == NodeControlMessageType::PacketFailureEvent)
+    {
+        const PacketFailureControlDetails& detFailure = std::get<
+            PacketFailureControlDetails
+        >(msgMessage.varDetails());
+        jsnMessage.update(jsnEncodeFailure(detFailure));
+    }
+    else if (msgMessage.typeMessage()
+        == NodeControlMessageType::ImprovedGroupObservationEvent)
+    {
+        const ImprovedGroupObservationControlDetails& detGroup = std::get<
+            ImprovedGroupObservationControlDetails
+        >(msgMessage.varDetails());
+        jsnMessage["eventId"] = detGroup.u64EventId();
+        jsnMessage["timestampMs"] = detGroup.u64TimestampMilliseconds();
+        jsnMessage["roundId"] = detGroup.strRoundId();
+        jsnMessage["senderId"] = detGroup.strSenderId();
+        jsnMessage["chainId"] = AuthenticationControlValueCodec::strEncodeChainId(
+            detGroup.u64ChainId()
+        );
+        jsnMessage["groupIndex"] = detGroup.u32GroupIndex();
+        jsnMessage["firstPacketIndex"] = detGroup.u32FirstPacketIndex();
+        jsnMessage["lastPacketIndex"] = detGroup.u32LastPacketIndex();
+        jsnMessage["detectionThreshold"] = detGroup.u32DetectionThreshold();
+        jsnMessage["verificationPath"] = pGroupPathName(
+            detGroup.pathVerification()
+        );
+        jsnMessage["fastGroupTagMatched"] = detGroup.bFastGroupTagMatched();
+        jsnMessage["detectionThresholdExceeded"] =
+            detGroup.bDetectionThresholdExceeded();
+        jsnMessage["locatedPacketIndexes"] =
+            detGroup.vecLocatedPacketIndexes();
+        jsnMessage["locationSteps"] = nlohmann::json::array();
+        for (const MatrixLocationStepControlDetails& detStep
+            : detGroup.vecLocationSteps())
+        {
+            jsnMessage["locationSteps"].push_back({
+                {"stepIndex", detStep.u32StepIndex()},
+                {"operation", detStep.strOperation()},
+                {"newGoodPacketIndexes", detStep.vecNewGoodPacketIndexes()},
+                {"remainingCandidateIndexes", detStep.vecRemainingCandidateIndexes()}
+            });
+        }
+    }
+    else if (msgMessage.typeMessage() == NodeControlMessageType::DosSummaryEvent)
+    {
+        const DosSummaryControlDetails& detSummary = std::get<
+            DosSummaryControlDetails
+        >(msgMessage.varDetails());
+        jsnMessage["timestampMs"] = detSummary.u64TimestampMilliseconds();
+        jsnMessage["windowMs"] = detSummary.u32WindowMilliseconds();
+        jsnMessage["invalidPacketCount"] = detSummary.u64InvalidPacketCount();
+        jsnMessage["rateLimitedDropCount"] =
+            detSummary.u64RateLimitedDropCount();
+        jsnMessage["legitimatePacketCount"] =
+            detSummary.u64LegitimatePacketCount();
+        jsnMessage["receiveQueueOverflowCount"] =
+            detSummary.u64ReceiveQueueOverflowCount();
+    }
+    else if (msgMessage.typeMessage()
+        == NodeControlMessageType::AbnormalEventSnapshot)
+    {
+        const AbnormalEventSnapshotControlDetails& detSnapshot = std::get<
+            AbnormalEventSnapshotControlDetails
+        >(msgMessage.varDetails());
+        jsnMessage["requestId"] = detSnapshot.strRequestId();
+        jsnMessage["sequence"] = detSnapshot.u32Sequence();
+        jsnMessage["finalBatch"] = detSnapshot.bFinalBatch();
+        jsnMessage["packetEvents"] = nlohmann::json::array();
+        for (const PacketObservationControlDetails& detPacket
+            : detSnapshot.vecPacketEvents())
+        {
+            jsnMessage["packetEvents"].push_back(
+                jsnEncodeObservedPacket(detPacket)
+            );
+        }
+        jsnMessage["failureEvents"] = nlohmann::json::array();
+        for (const PacketFailureControlDetails& detFailure
+            : detSnapshot.vecFailureEvents())
+        {
+            jsnMessage["failureEvents"].push_back(jsnEncodeFailure(detFailure));
+        }
+    }
     else
     {
         const ErrorResponseControlDetails& detError =
@@ -789,7 +1473,10 @@ NodeControlDecodeResult NodeControlJsonCodec::resDecode(const std::string& strJs
             ));
         }
 
-        if (strType == "PING" || strType == "PONG" || strType == "STATUS_REQUEST")
+        if (strType == "PING"
+            || strType == "PONG"
+            || strType == "STATUS_REQUEST"
+            || strType == "ABNORMAL_EVENT_SNAPSHOT_REQUEST")
         {
             NodeControlMessageType typeMessage = NodeControlMessageType::StatusRequest;
             if (strType == "PING")
@@ -799,6 +1486,10 @@ NodeControlDecodeResult NodeControlJsonCodec::resDecode(const std::string& strJs
             else if (strType == "PONG")
             {
                 typeMessage = NodeControlMessageType::Pong;
+            }
+            else if (strType == "ABNORMAL_EVENT_SNAPSHOT_REQUEST")
+            {
+                typeMessage = NodeControlMessageType::AbnormalEventSnapshotRequest;
             }
 
             return NodeControlMessage(RequestControlDetails(
@@ -975,6 +1666,109 @@ NodeControlDecodeResult NodeControlJsonCodec::resDecode(const std::string& strJs
                 jsnMessage.at("missingPacketCount").get<std::uint32_t>(),
                 varDecodeResultDetails(jsnMessage.at("payloadDetails")),
                 jsnMessage.at("message").get<std::string>()
+            ));
+        }
+
+        if (strType == "PACKET_OBSERVATION_EVENT")
+        {
+            return NodeControlMessage(detDecodeObservedPacket(jsnMessage));
+        }
+
+        if (strType == "PACKET_FAILURE_EVENT")
+        {
+            return NodeControlMessage(detDecodeFailure(jsnMessage));
+        }
+
+        if (strType == "IMPROVED_GROUP_OBSERVATION_EVENT")
+        {
+            std::vector<MatrixLocationStepControlDetails> vecSteps;
+            for (const nlohmann::json& jsnStep
+                : jsnMessage.at("locationSteps"))
+            {
+                vecSteps.emplace_back(
+                    jsnStep.at("stepIndex").get<std::uint32_t>(),
+                    jsnStep.at("operation").get<std::string>(),
+                    jsnStep.value(
+                        "newGoodPacketIndexes",
+                        std::vector<std::uint32_t>()
+                    ),
+                    jsnStep.value(
+                        "remainingCandidateIndexes",
+                        std::vector<std::uint32_t>()
+                    )
+                );
+            }
+
+            return NodeControlMessage(ImprovedGroupObservationControlDetails(
+                jsnMessage.at("eventId").get<std::uint64_t>(),
+                jsnMessage.at("timestampMs").get<std::uint64_t>(),
+                jsnMessage.at("roundId").get<std::string>(),
+                jsnMessage.at("senderId").get<std::string>(),
+                AuthenticationControlValueCodec::u64DecodeChainId(
+                    jsnMessage.at("chainId").get<std::string>()
+                ),
+                jsnMessage.at("groupIndex").get<std::uint32_t>(),
+                jsnMessage.at("firstPacketIndex").get<std::uint32_t>(),
+                jsnMessage.at("lastPacketIndex").get<std::uint32_t>(),
+                jsnMessage.at("detectionThreshold").get<std::uint32_t>(),
+                pathGroupParse(
+                    jsnMessage.at("verificationPath").get<std::string>()
+                ),
+                jsnMessage.at("fastGroupTagMatched").get<bool>(),
+                jsnMessage.at("detectionThresholdExceeded").get<bool>(),
+                jsnMessage.value(
+                    "locatedPacketIndexes",
+                    std::vector<std::uint32_t>()
+                ),
+                std::move(vecSteps)
+            ));
+        }
+
+        if (strType == "DOS_SUMMARY_EVENT")
+        {
+            return NodeControlMessage(DosSummaryControlDetails(
+                jsnMessage.at("timestampMs").get<std::uint64_t>(),
+                jsnMessage.at("windowMs").get<std::uint32_t>(),
+                jsnMessage.at("invalidPacketCount").get<std::uint64_t>(),
+                jsnMessage.at("rateLimitedDropCount").get<std::uint64_t>(),
+                jsnMessage.at("legitimatePacketCount").get<std::uint64_t>(),
+                jsnMessage.at("receiveQueueOverflowCount").get<std::uint64_t>()
+            ));
+        }
+
+        if (strType == "ABNORMAL_EVENT_SNAPSHOT")
+        {
+            std::vector<PacketObservationControlDetails> vecPackets;
+            std::vector<PacketFailureControlDetails> vecFailures;
+            const nlohmann::json& jsnPackets = jsnMessage.at("packetEvents");
+            const nlohmann::json& jsnFailures = jsnMessage.at("failureEvents");
+            if (!jsnPackets.is_array()
+                || jsnPackets.size() > 64
+                || !jsnFailures.is_array()
+                || jsnFailures.size() > 64)
+            {
+                throw std::invalid_argument(
+                    "Abnormal event snapshot batch is invalid"
+                );
+            }
+
+            vecPackets.reserve(jsnPackets.size());
+            for (const nlohmann::json& jsnPacket : jsnPackets)
+            {
+                vecPackets.push_back(detDecodeObservedPacket(jsnPacket));
+            }
+            vecFailures.reserve(jsnFailures.size());
+            for (const nlohmann::json& jsnFailure : jsnFailures)
+            {
+                vecFailures.push_back(detDecodeFailure(jsnFailure));
+            }
+
+            return NodeControlMessage(AbnormalEventSnapshotControlDetails(
+                jsnMessage.at("requestId").get<std::string>(),
+                jsnMessage.at("sequence").get<std::uint32_t>(),
+                jsnMessage.at("finalBatch").get<bool>(),
+                std::move(vecPackets),
+                std::move(vecFailures)
             ));
         }
 

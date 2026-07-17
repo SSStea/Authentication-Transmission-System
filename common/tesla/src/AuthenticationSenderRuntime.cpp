@@ -1,6 +1,7 @@
 #include "tesla/core/AuthenticationSenderRuntime.h"
 
 #include "tesla/core/AuthenticationPacketInput.h"
+#include "tesla/core/AuthenticationObservationFactory.h"
 #include "tesla/core/ImprovedTeslaDetails.h"
 #include "tesla/core/ImprovedTeslaStrategy.h"
 #include "tesla/core/NativeTeslaDetails.h"
@@ -123,10 +124,16 @@ public:
 
     Impl(
         DatagramSender fnDatagramSender,
-        ResultHandler fnResultHandler
+        ResultHandler fnResultHandler,
+        ObservationHandler fnObservationHandler,
+        LocalKeyChainHandler fnLocalKeyChainHandler,
+        std::string strLocalIpAddress
     )
         : m_fnDatagramSender(std::move(fnDatagramSender)),
-          m_fnResultHandler(std::move(fnResultHandler))
+          m_fnResultHandler(std::move(fnResultHandler)),
+          m_fnObservationHandler(std::move(fnObservationHandler)),
+          m_fnLocalKeyChainHandler(std::move(fnLocalKeyChainHandler)),
+          m_strLocalIpAddress(std::move(strLocalIpAddress))
     {
         if (!m_fnDatagramSender || !m_fnResultHandler)
         {
@@ -187,14 +194,34 @@ public:
         );
         validateScheduling(prmRound, vecIntervals, durWorstGeneration);
 
-        std::lock_guard<std::mutex> lckState(m_mtxState);
-        m_optSenderContext = std::move(ctxSender);
-        m_optPayloadWorkload = std::move(varWorkload);
-        m_vecIntervals = std::move(vecIntervals);
-        m_durWorstGeneration = durWorstGeneration;
-        m_bConfigured = true;
-        m_bRunning = false;
-        m_bPaused = false;
+        std::vector<crypto::Digest> vecKeys;
+        vecKeys.reserve(ctxSender.keyChain().nDataIntervalCount() + 1U);
+        vecKeys.push_back(ctxSender.keyChain().digCommitmentKey());
+        for (std::size_t nKeyIndex = 1;
+             nKeyIndex <= ctxSender.keyChain().nDataIntervalCount();
+             ++nKeyIndex)
+        {
+            vecKeys.push_back(ctxSender.keyChain().digDataKey(nKeyIndex));
+        }
+        const LocalSenderKeyChainSnapshot snpKeyChain(
+            ctxSender.matMaterial().strSenderId(),
+            ctxSender.matMaterial().u64ChainId(),
+            prmRound.u32DisclosureDelay(),
+            std::move(vecKeys)
+        );
+
+        {
+            std::lock_guard<std::mutex> lckState(m_mtxState);
+            m_optSenderContext = std::move(ctxSender);
+            m_optPayloadWorkload = std::move(varWorkload);
+            m_vecIntervals = std::move(vecIntervals);
+            m_durWorstGeneration = durWorstGeneration;
+            m_bConfigured = true;
+            m_bRunning = false;
+            m_bPaused = false;
+        }
+
+        emitLocalKeyChainObservation(snpKeyChain);
     }
 
     void resetConfiguration() noexcept
@@ -812,6 +839,11 @@ private:
                 const bool bSent = m_fnDatagramSender(
                     intDatagrams.vecDatagrams[nDatagramIndex]
                 );
+                emitPacketObservation(
+                    intDatagrams.vecDatagrams[nDatagramIndex],
+                    bSent,
+                    u64NowMilliseconds()
+                );
                 const std::chrono::nanoseconds durSend =
                     std::chrono::duration_cast<std::chrono::nanoseconds>(
                         SteadyClock::now() - tpSendStart
@@ -837,6 +869,8 @@ private:
             {
                 break;
             }
+
+            emitKeyChainProgress(u32IntervalIndex, false);
 
             std::unique_lock<std::mutex> lckState(m_mtxState);
             if (m_optPauseAfterInterval.has_value()
@@ -890,6 +924,7 @@ private:
 
         if (bOverrun)
         {
+            emitSchedulingFailure();
             emitResult(
                 AuthenticationRuntimeResultStatus::InvalidSchedulingOverrun,
                 "Authentication interval exceeded its runtime deadline"
@@ -897,6 +932,10 @@ private:
         }
         else if (!bStopRequested())
         {
+            emitKeyChainProgress(
+                static_cast<std::uint32_t>(m_vecIntervals.size() - 1U),
+                true
+            );
             emitResult(
                 AuthenticationRuntimeResultStatus::Completed,
                 "Sender completed all data and disclosure intervals"
@@ -917,6 +956,203 @@ private:
         std::lock_guard<std::mutex> lckState(m_mtxState);
         m_bRunning = false;
         m_bPaused = false;
+    }
+
+    void emitPacketObservation(
+        const protocol::ByteBuffer& vecDatagram,
+        bool bSent,
+        std::uint64_t u64TimestampMilliseconds
+    ) noexcept
+    {
+        if (!m_fnObservationHandler || !m_optSenderContext.has_value())
+        {
+            return;
+        }
+
+        try
+        {
+            const SenderAuthenticationMaterial& matMaterial =
+                m_optSenderContext->matMaterial();
+            const AuthenticationRoundParameters& prmRound =
+                matMaterial.prmRoundParameters();
+            const protocol::UdpAuthenticationPacketDecodeResult resPacket =
+                protocol::UdpAuthenticationPacketCodec::resDecode(
+                    vecDatagram,
+                    ctxCreatePacketContext(prmRound)
+                );
+            if (!std::holds_alternative<protocol::UdpAuthenticationPacket>(
+                    resPacket
+                ))
+            {
+                return;
+            }
+
+            const protocol::UdpAuthenticationPacket& udpPacket = std::get<
+                protocol::UdpAuthenticationPacket
+            >(resPacket);
+            std::uint32_t u32IntervalIndex = 0;
+            std::uint32_t u32PacketIndex = 0;
+            if (udpPacket.bIsDataPacket())
+            {
+                const protocol::UdpDataPacket& udpData = std::get<
+                    protocol::UdpDataPacket
+                >(udpPacket.varDetails());
+                u32IntervalIndex = udpData.u32IntervalIndex();
+                u32PacketIndex = udpData.u32PacketIndex();
+            }
+            else
+            {
+                u32IntervalIndex = std::get<protocol::UdpDisclosurePacket>(
+                    udpPacket.varDetails()
+                ).u32IntervalIndex();
+            }
+
+            const std::uint64_t u64EventId = m_u64NextObservationEventId++;
+            m_fnObservationHandler(protocol::AuthenticationObservation(
+                protocol::PacketObservationControlDetails(
+                    u64EventId,
+                    u64TimestampMilliseconds,
+                    m_strRoundId,
+                    matMaterial.strSenderId(),
+                    m_strLocalIpAddress,
+                    m_strLocalIpAddress,
+                    "TESLA_MULTICAST",
+                    protocol::PacketObservationDirection::Tx,
+                    protocol::PacketSourceType::NormalSender,
+                    matMaterial.u64ChainId(),
+                    u32IntervalIndex,
+                    u32PacketIndex,
+                    prmRound.u32PacketsPerInterval(),
+                    prmRound.u32DisclosureDelay(),
+                    AuthenticationObservationFactory::algMap(
+                        prmRound.algCryptoAlgorithm()
+                    ),
+                    AuthenticationObservationFactory::modeMap(
+                        prmRound.modeAuthentication()
+                    ),
+                    bSent
+                        ? protocol::PacketAuthenticationStatus::Generated
+                        : protocol::PacketAuthenticationStatus::Failed,
+                    AuthenticationObservationFactory::strCandidateHash(
+                        vecDatagram
+                    ),
+                    1,
+                    bSent ? "Datagram sent" : "Datagram send failed",
+                    AuthenticationObservationFactory::varPayloadDetails(
+                        udpPacket
+                    ),
+                    vecDatagram
+                )
+            ));
+        }
+        catch (...)
+        {
+            // 监控回调异常不能破坏绝对时间发包线程。
+        }
+    }
+
+    void emitKeyChainProgress(
+        std::uint32_t u32LogicalInterval,
+        bool bCompleted
+    ) noexcept
+    {
+        if (!m_fnLocalKeyChainHandler || !m_optSenderContext.has_value())
+        {
+            return;
+        }
+
+        try
+        {
+            const SenderAuthenticationMaterial& matMaterial =
+                m_optSenderContext->matMaterial();
+            const AuthenticationRoundParameters& prmRound =
+                matMaterial.prmRoundParameters();
+            const std::uint32_t u32DataIntervalCount =
+                static_cast<std::uint32_t>(prmRound.nDataIntervalCount());
+            const std::uint32_t u32CurrentKeyIndex =
+                u32LogicalInterval <= u32DataIntervalCount && !bCompleted
+                ? u32LogicalInterval
+                : 0;
+            const std::uint32_t u32DisclosedThrough =
+                u32LogicalInterval > prmRound.u32DisclosureDelay()
+                ? std::min(
+                    u32DataIntervalCount,
+                    u32LogicalInterval - prmRound.u32DisclosureDelay()
+                )
+                : 0;
+            emitLocalKeyChainObservation(LocalSenderKeyChainProgress(
+                m_strRoundId,
+                matMaterial.u64ChainId(),
+                u32CurrentKeyIndex,
+                bCompleted ? u32DataIntervalCount : u32DisclosedThrough,
+                bCompleted
+            ));
+        }
+        catch (...)
+        {
+            // 本地密钥链展示失败不能影响认证发送结果。
+        }
+    }
+
+    void emitSchedulingFailure() noexcept
+    {
+        if (!m_fnObservationHandler || !m_optSenderContext.has_value())
+        {
+            return;
+        }
+
+        try
+        {
+            const SenderAuthenticationMaterial& matMaterial =
+                m_optSenderContext->matMaterial();
+            m_fnObservationHandler(protocol::AuthenticationObservation(
+                protocol::PacketFailureControlDetails(
+                    m_u64NextObservationEventId++,
+                    0,
+                    u64NowMilliseconds(),
+                    protocol::ObservationSeverity::Error,
+                    protocol::AuthenticationFailureType::InvalidSchedulingOverrun,
+                    m_strRoundId,
+                    matMaterial.strSenderId(),
+                    "",
+                    "",
+                    matMaterial.u64ChainId(),
+                    m_u32CurrentInterval,
+                    m_u32SentDataPacketCount + 1U,
+                    std::nullopt,
+                    "",
+                    "Authentication interval exceeded its runtime deadline; "
+                    "remaining datagrams were not sent",
+                    "",
+                    "",
+                    {},
+                    1
+                )
+            ));
+        }
+        catch (...)
+        {
+            // 调度失败日志属于观测面，不能掩盖原始运行时结果。
+        }
+    }
+
+    void emitLocalKeyChainObservation(
+        const LocalSenderKeyChainObservation& varObservation
+    ) noexcept
+    {
+        if (!m_fnLocalKeyChainHandler)
+        {
+            return;
+        }
+
+        try
+        {
+            m_fnLocalKeyChainHandler(varObservation);
+        }
+        catch (...)
+        {
+            // 私有展示回调只服务本机GUI，不参与协议状态机。
+        }
     }
 
     void emitResult(
@@ -989,6 +1225,9 @@ private:
 
     DatagramSender m_fnDatagramSender;
     ResultHandler  m_fnResultHandler;
+    ObservationHandler m_fnObservationHandler;
+    LocalKeyChainHandler m_fnLocalKeyChainHandler;
+    std::string          m_strLocalIpAddress;
 
     mutable std::mutex              m_mtxState;
     std::condition_variable         m_cndState;
@@ -1010,15 +1249,22 @@ private:
     bool                            m_bRunning = false;
     bool                            m_bPaused = false;
     bool                            m_bStopRequested = false;
+    std::uint64_t                   m_u64NextObservationEventId = 1;
 };
 
 AuthenticationSenderRuntime::AuthenticationSenderRuntime(
     DatagramSender fnDatagramSender,
-    ResultHandler fnResultHandler
+    ResultHandler fnResultHandler,
+    ObservationHandler fnObservationHandler,
+    LocalKeyChainHandler fnLocalKeyChainHandler,
+    std::string strLocalIpAddress
 )
     : m_ptrImpl(std::make_unique<Impl>(
           std::move(fnDatagramSender),
-          std::move(fnResultHandler)
+          std::move(fnResultHandler),
+          std::move(fnObservationHandler),
+          std::move(fnLocalKeyChainHandler),
+          std::move(strLocalIpAddress)
       ))
 {
 }

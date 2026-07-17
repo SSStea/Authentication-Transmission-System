@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tesla/core/AuthenticationObservationStore.h"
 #include "tesla/protocol/NodeControlMessage.h"
 #include "tesla/protocol/TcpFrame.h"
 
@@ -8,6 +9,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <vector>
 
 class QTcpSocket;
 class QTimer;
@@ -41,16 +43,30 @@ public:
     bool bSenderRunning() const noexcept;
     bool bReceiverRunning() const noexcept;
     qint64 nLastResponseAgeMilliseconds() const noexcept;
+    std::vector<tesla::protocol::PacketObservationControlDetails>
+        vecPacketObservationSnapshot() const;
+    std::vector<tesla::protocol::PacketFailureControlDetails>
+        vecFailureObservationSnapshot() const;
+    std::vector<tesla::protocol::ImprovedGroupObservationControlDetails>
+        vecGroupObservationSnapshot() const;
+    std::vector<tesla::protocol::DosSummaryControlDetails>
+        vecDosSummarySnapshot() const;
 
 signals:
     void stateChanged();
     void statusUpdated();
     void logMessage(const QString& strMessage);
     void fileStatusMessage(const QString& strMessage);
+    void authenticationObservationsChanged();
 
 private:
     void processTcpData();
     void sendHello();
+    void requestAbnormalSnapshot();
+    void appendObservation(
+        const tesla::protocol::AuthenticationObservation& varObservation
+    );
+    void scheduleObservationRefresh();
     void sendPing();
     bool bSendControl(const tesla::protocol::NodeControlMessage& msgMessage);
     void checkConnection();
@@ -65,4 +81,6 @@ private:
     bool                      m_bSenderRunning;
     bool                      m_bReceiverRunning;
     qint64                    m_nLastResponseMilliseconds;
+    tesla::core::AuthenticationObservationStore m_stoObservations;
+    bool                      m_bObservationRefreshScheduled{false};
 };

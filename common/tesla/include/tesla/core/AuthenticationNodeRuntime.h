@@ -1,6 +1,8 @@
 #pragma once
 
 #include "tesla/core/AuthenticationRuntimeTypes.h"
+#include "tesla/core/AuthenticationObservationStore.h"
+#include "tesla/core/LocalSenderKeyChainObservation.h"
 #include "tesla/core/ReceiverAuthenticationContextStore.h"
 #include "tesla/protocol/NodeControlMessage.h"
 #include "tesla/protocol/ProtocolTypes.h"
@@ -12,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace tesla::core
 {
@@ -35,13 +38,22 @@ public:
         std::uint64_t,
         const protocol::ByteBuffer&
     )>;
+    using ObservationHandler = std::function<void(
+        const protocol::AuthenticationObservation&
+    )>;
+    using LocalKeyChainHandler = std::function<void(
+        const LocalSenderKeyChainObservation&
+    )>;
 
     AuthenticationNodeRuntime(
         std::string strNodeName,
         DatagramSender fnDatagramSender,
         ControlEventHandler fnControlEventHandler,
         TimeSynchronizationProvider fnTimeSynchronizationProvider,
-        RecoveredFileHandler fnRecoveredFileHandler = {}
+        RecoveredFileHandler fnRecoveredFileHandler = {},
+        ObservationHandler fnObservationHandler = {},
+        LocalKeyChainHandler fnLocalKeyChainHandler = {},
+        std::string strLocalIpAddress = {}
     );
     ~AuthenticationNodeRuntime();
 
@@ -77,6 +89,16 @@ public:
         const std::string& strSourceIpAddress,
         std::uint64_t u64ChainId
     ) const;
+    std::vector<protocol::PacketObservationControlDetails>
+        vecPacketObservationSnapshot() const;
+    std::vector<protocol::PacketFailureControlDetails>
+        vecFailureObservationSnapshot() const;
+    std::vector<protocol::PacketObservationControlDetails>
+        vecAbnormalPacketObservationSnapshot() const;
+    std::vector<protocol::ImprovedGroupObservationControlDetails>
+        vecGroupObservationSnapshot() const;
+    std::vector<protocol::DosSummaryControlDetails>
+        vecDosSummarySnapshot() const;
 
 private:
     class Impl;

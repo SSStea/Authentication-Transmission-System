@@ -5,7 +5,9 @@
 #include "tesla/workload/FileWorkload.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -31,6 +33,11 @@ public:
         std::uint64_t,
         workload::FileWorkload
     )>;
+    using AbnormalSnapshot = std::pair<
+        std::vector<protocol::PacketObservationControlDetails>,
+        std::vector<protocol::PacketFailureControlDetails>
+    >;
+    using AbnormalSnapshotProvider = std::function<AbnormalSnapshot()>;
 
     TcpManagementServer(
         std::string strBindAddress,
@@ -38,7 +45,8 @@ public:
         std::string strNodeName,
         RuntimeStateProvider fnStateProvider,
         ControlMessageHandler fnControlMessageHandler,
-        FilePayloadHandler fnFilePayloadHandler
+        FilePayloadHandler fnFilePayloadHandler,
+        AbnormalSnapshotProvider fnAbnormalSnapshotProvider
     );
     ~TcpManagementServer();
 
@@ -52,12 +60,17 @@ public:
     void broadcastControlMessage(
         const protocol::NodeControlMessage& msgMessage
     ) const noexcept;
+    /** @brief 将高频观察事件放入有界队列，只异步发送给MONITOR客户端。 */
+    void enqueueMonitorObservation(
+        const protocol::AuthenticationObservation& varObservation
+    ) noexcept;
 
 private:
     struct ClientConnection;
 
     void acceptLoop();
     void clientLoop(const std::shared_ptr<ClientConnection>& ptrClient);
+    void monitorBroadcastLoop();
     bool bHandleFrame(
         const std::shared_ptr<ClientConnection>& ptrClient,
         bool& bHelloReceived,
@@ -75,11 +88,17 @@ private:
     RuntimeStateProvider             m_fnStateProvider;
     ControlMessageHandler            m_fnControlMessageHandler;
     FilePayloadHandler               m_fnFilePayloadHandler;
+    AbnormalSnapshotProvider         m_fnAbnormalSnapshotProvider;
     std::atomic<bool>                m_bRunning{false};
     std::atomic<int>                 m_nListenSocket{-1};
     std::thread                      m_thrAccept;
+    std::thread                      m_thrMonitorBroadcast;
     mutable std::mutex               m_mtxClients;
     std::vector<std::shared_ptr<ClientConnection>> m_vecClients;
     std::vector<std::thread>         m_vecClientThreads;
+    mutable std::mutex               m_mtxMonitorQueue;
+    std::condition_variable          m_cndMonitorQueue;
+    std::deque<protocol::NodeControlMessage> m_deqMonitorQueue;
+    std::atomic<std::size_t>         m_nDroppedMonitorEventCount{0};
 };
 }

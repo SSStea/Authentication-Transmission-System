@@ -63,23 +63,46 @@ private:
 };
 
 /** @brief 保存KS+RS回退验证得到的位置分类和门限状态。 */
+/** @brief 一条不暴露矩阵构造参数的行扫描定位轨迹。 */
+class KsRsLocationStep final
+{
+public:
+    KsRsLocationStep(
+        std::size_t nScanStep,
+        std::vector<std::size_t> vecNewGoodPositions,
+        std::vector<std::size_t> vecRemainingCandidatePositions
+    );
+
+    std::size_t nScanStep() const noexcept;
+    const std::vector<std::size_t>& vecNewGoodPositions() const noexcept;
+    const std::vector<std::size_t>& vecRemainingCandidatePositions() const noexcept;
+
+private:
+    std::size_t              m_nScanStep;
+    std::vector<std::size_t> m_vecNewGoodPositions;
+    std::vector<std::size_t> m_vecRemainingCandidatePositions;
+};
+
 class KsRsVerificationResult final
 {
 public:
     KsRsVerificationResult(
         std::vector<std::size_t> vecGoodPositions,
         std::vector<std::size_t> vecBadPositions,
-        bool bDetectionThresholdExceeded
+        bool bDetectionThresholdExceeded,
+        std::vector<KsRsLocationStep> vecLocationSteps
     );
 
     bool bDetectionThresholdExceeded() const noexcept;
     const std::vector<std::size_t>& vecBadPositions() const noexcept;
     const std::vector<std::size_t>& vecGoodPositions() const noexcept;
+    const std::vector<KsRsLocationStep>& vecLocationSteps() const noexcept;
 
 private:
     std::vector<std::size_t> m_vecGoodPositions;
     std::vector<std::size_t> m_vecBadPositions;
     bool                     m_bDetectionThresholdExceeded;
+    std::vector<KsRsLocationStep> m_vecLocationSteps;
 };
 
 /** @brief 利用KS+RS矩阵和SAMD标签定位可认证及可疑报文位置。 */

@@ -17,6 +17,8 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <vector>
 
 class QTcpServer;
 class QTimer;
@@ -48,12 +50,26 @@ public:
     std::size_t nConnectedClientCount() const noexcept;
     const QString& strNodeName() const noexcept;
     std::uint16_t u16ManagementPort() const noexcept;
+    std::vector<tesla::protocol::PacketObservationControlDetails>
+        vecPacketObservationSnapshot() const;
+    std::vector<tesla::protocol::PacketFailureControlDetails>
+        vecFailureObservationSnapshot() const;
+    std::vector<tesla::protocol::ImprovedGroupObservationControlDetails>
+        vecGroupObservationSnapshot() const;
+    std::vector<tesla::protocol::DosSummaryControlDetails>
+        vecDosSummarySnapshot() const;
+    std::optional<tesla::core::LocalSenderKeyChainSnapshot>
+        optLocalKeyChainSnapshot() const;
+    std::optional<tesla::core::LocalSenderKeyChainProgress>
+        optLocalKeyChainProgress() const;
 
 signals:
     void stateChanged();
     void logMessage(const QString& strMessage);
     /** @brief 文件上传、Sender切片或Receiver恢复状态，供文件页单独展示。 */
     void fileStatusMessage(const QString& strMessage);
+    void authenticationObservationsChanged();
+    void localKeyChainChanged();
 
 private:
     struct ClientState;
@@ -117,5 +133,12 @@ private:
     std::deque<tesla::protocol::ByteBuffer> m_deqAuthenticationSendQueue;
     std::unique_ptr<tesla::core::AuthenticationNodeRuntime>
         m_ptrAuthenticationRuntime;
+    std::atomic<bool> m_bObservationRefreshScheduled{false};
+    std::atomic<bool> m_bKeyChainRefreshScheduled{false};
+    mutable std::mutex m_mtxLocalKeyChain;
+    std::optional<tesla::core::LocalSenderKeyChainSnapshot>
+        m_optLocalKeyChainSnapshot;
+    std::optional<tesla::core::LocalSenderKeyChainProgress>
+        m_optLocalKeyChainProgress;
     QHash<class QTcpSocket*, std::shared_ptr<ClientState>> m_mapClients;
 };

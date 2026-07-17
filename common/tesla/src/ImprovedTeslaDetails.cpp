@@ -30,13 +30,15 @@ ImprovedVerificationDetails::ImprovedVerificationDetails(
     bool bFastGroupTagMatched,
     std::vector<std::size_t> vecAuthenticatedPositions,
     std::vector<std::size_t> vecRejectedPositions,
-    bool bDetectionThresholdExceeded
+    bool bDetectionThresholdExceeded,
+    std::vector<KsRsLocationStep> vecLocationSteps
 )
     : m_pathVerification(pathVerification),
       m_bFastGroupTagMatched(bFastGroupTagMatched),
       m_vecAuthenticatedPositions(std::move(vecAuthenticatedPositions)),
       m_vecRejectedPositions(std::move(vecRejectedPositions)),
-      m_bDetectionThresholdExceeded(bDetectionThresholdExceeded)
+      m_bDetectionThresholdExceeded(bDetectionThresholdExceeded),
+      m_vecLocationSteps(std::move(vecLocationSteps))
 {
 }
 
@@ -66,5 +68,11 @@ const std::vector<std::size_t>&
 ImprovedVerificationDetails::vecRejectedPositions() const noexcept
 {
     return m_vecRejectedPositions;
+}
+
+const std::vector<KsRsLocationStep>&
+ImprovedVerificationDetails::vecLocationSteps() const noexcept
+{
+    return m_vecLocationSteps;
 }
 }

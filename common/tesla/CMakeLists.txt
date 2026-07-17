@@ -2,6 +2,8 @@ set(TESLA_CORE_HEADERS
     include/tesla/core/AuthenticationAuthority.h
     include/tesla/core/AuthenticationInputEncoder.h
     include/tesla/core/AuthenticationNodeRuntime.h
+    include/tesla/core/AuthenticationObservationFactory.h
+    include/tesla/core/AuthenticationObservationStore.h
     include/tesla/core/AuthenticationPacketInput.h
     include/tesla/core/AuthenticationReceiverRuntime.h
     include/tesla/core/AuthenticationRoundParameters.h
@@ -11,6 +13,7 @@ set(TESLA_CORE_HEADERS
     include/tesla/core/ImprovedTeslaDetails.h
     include/tesla/core/ImprovedTeslaStrategy.h
     include/tesla/core/KsRsMatrix.h
+    include/tesla/core/LocalSenderKeyChainObservation.h
     include/tesla/core/NativeTeslaDetails.h
     include/tesla/core/NativeTeslaStrategy.h
     include/tesla/core/ReceiverAuthenticationContextStore.h
@@ -25,6 +28,8 @@ set(TESLA_CORE_SOURCES
     src/AuthenticationAuthority.cpp
     src/AuthenticationInputEncoder.cpp
     src/AuthenticationNodeRuntime.cpp
+    src/AuthenticationObservationFactory.cpp
+    src/AuthenticationObservationStore.cpp
     src/AuthenticationPacketInput.cpp
     src/AuthenticationReceiverRuntime.cpp
     src/AuthenticationRoundParameters.cpp
@@ -34,6 +39,7 @@ set(TESLA_CORE_SOURCES
     src/ImprovedTeslaDetails.cpp
     src/ImprovedTeslaStrategy.cpp
     src/KsRsMatrix.cpp
+    src/LocalSenderKeyChainObservation.cpp
     src/NativeTeslaDetails.cpp
     src/NativeTeslaStrategy.cpp
     src/ReceiverAuthenticationContextStore.cpp

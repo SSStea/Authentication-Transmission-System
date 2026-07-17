@@ -8,6 +8,12 @@
 
 class QLabel;
 class QTextEdit;
+class PcLocalKeyChainWidget;
+class PcMatrixLocationWidget;
+namespace tesla::gui
+{
+class AuthenticationMonitorWidget;
+}
 
 /** @brief PC广播节点阶段5主窗口，保留本地算法和矩阵展示边界。 */
 class PcNodeMainWindow final : public QMainWindow
@@ -23,15 +29,12 @@ public:
 
 private:
     QWidget* pCreateStatusPage();
-    QWidget* pCreatePlaceholderPage(
-        const QString& strTitle,
-        const QString& strDescription
-    );
     QWidget* pCreateFileStatusPage();
     QWidget* pCreateLogPage();
     void refreshStatus();
     void appendLog(const QString& strMessage);
     void appendFileStatus(const QString& strMessage);
+    void refreshAuthenticationViews();
     void applyStyle();
 
     PcNodeNetworkController m_ctlNetwork;
@@ -42,4 +45,7 @@ private:
     QLabel*                 m_pReceiverValue;
     QTextEdit*              m_pFileStatusEdit;
     QTextEdit*              m_pLogEdit;
+    tesla::gui::AuthenticationMonitorWidget* m_pAuthenticationMonitor;
+    PcLocalKeyChainWidget*  m_pKeyChainWidget;
+    PcMatrixLocationWidget* m_pMatrixWidget;
 };

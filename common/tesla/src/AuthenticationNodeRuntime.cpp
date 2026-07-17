@@ -205,7 +205,10 @@ public:
         DatagramSender fnDatagramSender,
         ControlEventHandler fnControlEventHandler,
         TimeSynchronizationProvider fnTimeSynchronizationProvider,
-        RecoveredFileHandler fnRecoveredFileHandler
+        RecoveredFileHandler fnRecoveredFileHandler,
+        ObservationHandler fnObservationHandler,
+        LocalKeyChainHandler fnLocalKeyChainHandler,
+        std::string strLocalIpAddress
     )
         : m_strNodeName(std::move(strNodeName)),
           m_fnControlEventHandler(std::move(fnControlEventHandler)),
@@ -213,6 +216,8 @@ public:
               std::move(fnTimeSynchronizationProvider)
           ),
           m_fnRecoveredFileHandler(std::move(fnRecoveredFileHandler)),
+          m_fnObservationHandler(std::move(fnObservationHandler)),
+          m_fnLocalKeyChainHandler(std::move(fnLocalKeyChainHandler)),
           m_runSender(
               std::move(fnDatagramSender),
               [this](const AuthenticationRuntimeResult& resResult)
@@ -221,7 +226,16 @@ public:
                       resResult,
                       protocol::AuthenticationRoundResultRole::Sender
                   );
-              }
+              },
+              [this](const protocol::AuthenticationObservation& varObservation)
+              {
+                  processObservation(varObservation);
+              },
+              [this](const LocalSenderKeyChainObservation& varObservation)
+              {
+                  processLocalKeyChainObservation(varObservation);
+              },
+              std::move(strLocalIpAddress)
           ),
           m_runReceiver(
               [this](const AuthenticationRuntimeResult& resResult)
@@ -230,6 +244,10 @@ public:
                       resResult,
                       protocol::AuthenticationRoundResultRole::Receiver
                   );
+              },
+              [this](const protocol::AuthenticationObservation& varObservation)
+              {
+                  processObservation(varObservation);
               }
           )
     {
@@ -688,6 +706,8 @@ private:
                     );
                 }
 
+                m_stoObservations.beginRound(detCommand.strRoundId());
+
                 if (m_runReceiver.bIsConfigured())
                 {
                     m_runReceiver.start(
@@ -874,10 +894,82 @@ private:
         }
     }
 
+    void processObservation(
+        const protocol::AuthenticationObservation& varObservation
+    ) noexcept
+    {
+        try
+        {
+            m_stoObservations.resAppend(varObservation);
+            if (m_fnObservationHandler)
+            {
+                m_fnObservationHandler(varObservation);
+            }
+        }
+        catch (...)
+        {
+            // 观察数据存储或平台展示失败不得改变认证状态机结果。
+        }
+    }
+
+    void processLocalKeyChainObservation(
+        const LocalSenderKeyChainObservation& varObservation
+    ) noexcept
+    {
+        if (!m_fnLocalKeyChainHandler)
+        {
+            return;
+        }
+
+        try
+        {
+            m_fnLocalKeyChainHandler(varObservation);
+        }
+        catch (...)
+        {
+            // 完整密钥链仅用于PC本地展示，回调异常不能进入网络路径。
+        }
+    }
+
+public:
+    std::vector<protocol::PacketObservationControlDetails>
+    vecPacketObservationSnapshot() const
+    {
+        return m_stoObservations.vecPacketSnapshot();
+    }
+
+    std::vector<protocol::PacketFailureControlDetails>
+    vecFailureObservationSnapshot() const
+    {
+        return m_stoObservations.vecFailureSnapshot();
+    }
+
+    std::vector<protocol::PacketObservationControlDetails>
+    vecAbnormalPacketObservationSnapshot() const
+    {
+        return m_stoObservations.vecAbnormalPacketSnapshot();
+    }
+
+    std::vector<protocol::ImprovedGroupObservationControlDetails>
+    vecGroupObservationSnapshot() const
+    {
+        return m_stoObservations.vecGroupSnapshot();
+    }
+
+    std::vector<protocol::DosSummaryControlDetails> vecDosSummarySnapshot() const
+    {
+        return m_stoObservations.vecDosSummarySnapshot();
+    }
+
+private:
+
     std::string m_strNodeName;
     ControlEventHandler m_fnControlEventHandler;
     TimeSynchronizationProvider m_fnTimeSynchronizationProvider;
     RecoveredFileHandler m_fnRecoveredFileHandler;
+    ObservationHandler m_fnObservationHandler;
+    LocalKeyChainHandler m_fnLocalKeyChainHandler;
+    AuthenticationObservationStore m_stoObservations;
     mutable std::mutex m_mtxConfig;
     std::optional<SenderAuthenticationContext> m_optSenderContext;
     AuthenticationSenderRuntime m_runSender;
@@ -889,14 +981,20 @@ AuthenticationNodeRuntime::AuthenticationNodeRuntime(
     DatagramSender fnDatagramSender,
     ControlEventHandler fnControlEventHandler,
     TimeSynchronizationProvider fnTimeSynchronizationProvider,
-    RecoveredFileHandler fnRecoveredFileHandler
+    RecoveredFileHandler fnRecoveredFileHandler,
+    ObservationHandler fnObservationHandler,
+    LocalKeyChainHandler fnLocalKeyChainHandler,
+    std::string strLocalIpAddress
 )
     : m_ptrImpl(std::make_unique<Impl>(
           std::move(strNodeName),
           std::move(fnDatagramSender),
           std::move(fnControlEventHandler),
           std::move(fnTimeSynchronizationProvider),
-          std::move(fnRecoveredFileHandler)
+          std::move(fnRecoveredFileHandler),
+          std::move(fnObservationHandler),
+          std::move(fnLocalKeyChainHandler),
+          std::move(strLocalIpAddress)
       ))
 {
 }
@@ -990,5 +1088,35 @@ AuthenticationNodeRuntime::resFindReceiverContext(
         strSourceIpAddress,
         u64ChainId
     );
+}
+
+std::vector<protocol::PacketObservationControlDetails>
+AuthenticationNodeRuntime::vecPacketObservationSnapshot() const
+{
+    return m_ptrImpl->vecPacketObservationSnapshot();
+}
+
+std::vector<protocol::PacketFailureControlDetails>
+AuthenticationNodeRuntime::vecFailureObservationSnapshot() const
+{
+    return m_ptrImpl->vecFailureObservationSnapshot();
+}
+
+std::vector<protocol::PacketObservationControlDetails>
+AuthenticationNodeRuntime::vecAbnormalPacketObservationSnapshot() const
+{
+    return m_ptrImpl->vecAbnormalPacketObservationSnapshot();
+}
+
+std::vector<protocol::ImprovedGroupObservationControlDetails>
+AuthenticationNodeRuntime::vecGroupObservationSnapshot() const
+{
+    return m_ptrImpl->vecGroupObservationSnapshot();
+}
+
+std::vector<protocol::DosSummaryControlDetails>
+AuthenticationNodeRuntime::vecDosSummarySnapshot() const
+{
+    return m_ptrImpl->vecDosSummarySnapshot();
 }
 }

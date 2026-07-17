@@ -239,14 +239,46 @@ void KsRsMatrix::findBestParameters(
     }
 }
 
+KsRsLocationStep::KsRsLocationStep(
+    std::size_t nScanStep,
+    std::vector<std::size_t> vecNewGoodPositions,
+    std::vector<std::size_t> vecRemainingCandidatePositions
+)
+    : m_nScanStep(nScanStep),
+      m_vecNewGoodPositions(std::move(vecNewGoodPositions)),
+      m_vecRemainingCandidatePositions(
+          std::move(vecRemainingCandidatePositions)
+      )
+{
+}
+
+std::size_t KsRsLocationStep::nScanStep() const noexcept
+{
+    return m_nScanStep;
+}
+
+const std::vector<std::size_t>&
+KsRsLocationStep::vecNewGoodPositions() const noexcept
+{
+    return m_vecNewGoodPositions;
+}
+
+const std::vector<std::size_t>&
+KsRsLocationStep::vecRemainingCandidatePositions() const noexcept
+{
+    return m_vecRemainingCandidatePositions;
+}
+
 KsRsVerificationResult::KsRsVerificationResult(
     std::vector<std::size_t> vecGoodPositions,
     std::vector<std::size_t> vecBadPositions,
-    bool bDetectionThresholdExceeded
+    bool bDetectionThresholdExceeded,
+    std::vector<KsRsLocationStep> vecLocationSteps
 )
     : m_vecGoodPositions(std::move(vecGoodPositions)),
       m_vecBadPositions(std::move(vecBadPositions)),
-      m_bDetectionThresholdExceeded(bDetectionThresholdExceeded)
+      m_bDetectionThresholdExceeded(bDetectionThresholdExceeded),
+      m_vecLocationSteps(std::move(vecLocationSteps))
 {
 }
 
@@ -265,6 +297,12 @@ const std::vector<std::size_t>&
 KsRsVerificationResult::vecGoodPositions() const noexcept
 {
     return m_vecGoodPositions;
+}
+
+const std::vector<KsRsLocationStep>&
+KsRsVerificationResult::vecLocationSteps() const noexcept
+{
+    return m_vecLocationSteps;
 }
 
 KsRsVerificationResult KsRsVerifier::resVerify(
@@ -288,7 +326,8 @@ KsRsVerificationResult KsRsVerifier::resVerify(
         );
     }
 
-    std::vector<bool> vecIsGood(vecPacketMacSlots.size(), false);
+    std::vector<bool>             vecIsGood(vecPacketMacSlots.size(), false);
+    std::vector<KsRsLocationStep> vecLocationSteps;
 
     for (std::size_t nRowIndex = 0; nRowIndex < matKsRs.nRowCount(); ++nRowIndex)
     {
@@ -331,9 +370,33 @@ KsRsVerificationResult KsRsVerifier::resVerify(
                 vecReceivedTau[nRowIndex]
             ))
         {
+            std::vector<std::size_t> vecNewGoodPositions;
             for (std::size_t nPosition : vecRowPositions)
             {
+                if (!vecIsGood[nPosition])
+                {
+                    vecNewGoodPositions.push_back(nPosition);
+                }
                 vecIsGood[nPosition] = true;
+            }
+
+            if (!vecNewGoodPositions.empty())
+            {
+                std::vector<std::size_t> vecRemainingCandidates;
+                for (std::size_t nPosition = 0;
+                     nPosition < vecIsGood.size();
+                     ++nPosition)
+                {
+                    if (!vecIsGood[nPosition])
+                    {
+                        vecRemainingCandidates.push_back(nPosition);
+                    }
+                }
+                vecLocationSteps.emplace_back(
+                    nRowIndex + 1U,
+                    std::move(vecNewGoodPositions),
+                    std::move(vecRemainingCandidates)
+                );
             }
         }
     }
@@ -359,7 +422,8 @@ KsRsVerificationResult KsRsVerifier::resVerify(
     return KsRsVerificationResult(
         std::move(vecGoodPositions),
         std::move(vecBadPositions),
-        bThresholdExceeded
+        bThresholdExceeded,
+        std::move(vecLocationSteps)
     );
 }
 }

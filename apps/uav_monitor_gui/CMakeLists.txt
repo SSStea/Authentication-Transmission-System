@@ -26,6 +26,8 @@ target_link_libraries(tesla_uav_monitor_gui
         Qt6::Widgets
         tesla_metrics
         tesla_protocol
+        tesla_core
+        tesla_common_gui
 )
 
 set_target_properties(tesla_uav_monitor_gui

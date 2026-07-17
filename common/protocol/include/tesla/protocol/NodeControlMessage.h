@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tesla/protocol/AuthenticationControl.h"
+#include "tesla/protocol/MonitorControl.h"
 
 #include <cstdint>
 #include <string>
@@ -33,6 +34,12 @@ enum class NodeControlMessageType
     RoundStop,
     RoundCommandAcknowledgement,
     RoundResult,
+    PacketObservationEvent,
+    PacketFailureEvent,
+    ImprovedGroupObservationEvent,
+    DosSummaryEvent,
+    AbnormalEventSnapshotRequest,
+    AbnormalEventSnapshot,
     ErrorResponse
 };
 
@@ -121,6 +128,11 @@ using NodeControlMessageDetails = std::variant<
     AuthenticationRoundCommandControlDetails,
     AuthenticationRoundAcknowledgementControlDetails,
     AuthenticationRoundResultControlDetails,
+    PacketObservationControlDetails,
+    PacketFailureControlDetails,
+    ImprovedGroupObservationControlDetails,
+    DosSummaryControlDetails,
+    AbnormalEventSnapshotControlDetails,
     ErrorResponseControlDetails
 >;
 

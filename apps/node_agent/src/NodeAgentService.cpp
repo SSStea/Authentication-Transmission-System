@@ -145,6 +145,13 @@ NodeAgentService::NodeAgentService(
                   u64ChainId,
                   std::move(wrkFile)
               );
+          },
+          [this]()
+          {
+              return std::make_pair(
+                  m_runAuthentication.vecAbnormalPacketObservationSnapshot(),
+                  m_runAuthentication.vecFailureObservationSnapshot()
+              );
           }
       ),
       m_runAuthentication(
@@ -165,7 +172,13 @@ NodeAgentService::NodeAgentService(
                       return SystemTimeSynchronization::stsQuery();
                   }
               ),
-          bPersistRecoveredFile
+          bPersistRecoveredFile,
+          [this](const protocol::AuthenticationObservation& varObservation)
+          {
+              m_srvManagement.enqueueMonitorObservation(varObservation);
+          },
+          {},
+          m_cfgConfig.strBindAddress()
       ),
       m_srvDiscovery(
           m_cfgConfig.strBindAddress(),

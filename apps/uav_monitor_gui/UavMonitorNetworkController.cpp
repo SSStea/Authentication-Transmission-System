@@ -71,6 +71,7 @@ UavMonitorNetworkController::UavMonitorNetworkController(
             emit logMessage(QStringLiteral("MONITOR连接已建立"));
             emit stateChanged();
             sendHello();
+            requestAbnormalSnapshot();
             refreshStatus();
             m_pPollTimer->start();
         }
@@ -142,6 +143,8 @@ void UavMonitorNetworkController::connectToNode(
 
     m_pSocket->abort();
     m_decStream.reset();
+    m_stoObservations.clear();
+    emit authenticationObservationsChanged();
     m_strHostAddress = strHostAddress.trimmed();
     m_strNodeName.clear();
     m_bSenderRunning = false;
@@ -211,6 +214,30 @@ qint64 UavMonitorNetworkController::nLastResponseAgeMilliseconds() const noexcep
         0,
         QDateTime::currentMSecsSinceEpoch() - m_nLastResponseMilliseconds
     );
+}
+
+std::vector<PacketObservationControlDetails>
+UavMonitorNetworkController::vecPacketObservationSnapshot() const
+{
+    return m_stoObservations.vecPacketSnapshot();
+}
+
+std::vector<PacketFailureControlDetails>
+UavMonitorNetworkController::vecFailureObservationSnapshot() const
+{
+    return m_stoObservations.vecFailureSnapshot();
+}
+
+std::vector<ImprovedGroupObservationControlDetails>
+UavMonitorNetworkController::vecGroupObservationSnapshot() const
+{
+    return m_stoObservations.vecGroupSnapshot();
+}
+
+std::vector<DosSummaryControlDetails>
+UavMonitorNetworkController::vecDosSummarySnapshot() const
+{
+    return m_stoObservations.vecDosSummarySnapshot();
 }
 
 void UavMonitorNetworkController::processTcpData()
@@ -342,6 +369,70 @@ void UavMonitorNetworkController::processTcpData()
                     .arg(QString::fromStdString(detResult.strMessage()))
             );
         }
+        else if (msgMessage.typeMessage()
+            == NodeControlMessageType::PacketObservationEvent)
+        {
+            appendObservation(std::get<PacketObservationControlDetails>(
+                msgMessage.varDetails()
+            ));
+        }
+        else if (msgMessage.typeMessage()
+            == NodeControlMessageType::PacketFailureEvent)
+        {
+            const auto& detFailure = std::get<PacketFailureControlDetails>(
+                msgMessage.varDetails()
+            );
+            appendObservation(detFailure);
+            emit logMessage(QStringLiteral(
+                "[认证异常] Sender=%1 ChainId=%2 Interval=%3 Packet=%4 "
+                "ActualSource=%5 Reason=%6"
+            )
+                .arg(QString::fromStdString(detFailure.strSenderId()))
+                .arg(detFailure.u64ChainId())
+                .arg(detFailure.u32IntervalIndex())
+                .arg(detFailure.u32PacketIndex())
+                .arg(QString::fromStdString(detFailure.strActualSourceIp()))
+                .arg(QString::fromStdString(detFailure.strReason())));
+        }
+        else if (msgMessage.typeMessage()
+            == NodeControlMessageType::ImprovedGroupObservationEvent)
+        {
+            appendObservation(std::get<
+                ImprovedGroupObservationControlDetails
+            >(msgMessage.varDetails()));
+        }
+        else if (msgMessage.typeMessage()
+            == NodeControlMessageType::DosSummaryEvent)
+        {
+            const auto& detSummary = std::get<DosSummaryControlDetails>(
+                msgMessage.varDetails()
+            );
+            appendObservation(detSummary);
+            emit logMessage(QStringLiteral(
+                "最近%1毫秒：无效报文=%2，限速丢弃=%3，合法报文=%4，队列溢出=%5"
+            )
+                .arg(detSummary.u32WindowMilliseconds())
+                .arg(detSummary.u64InvalidPacketCount())
+                .arg(detSummary.u64RateLimitedDropCount())
+                .arg(detSummary.u64LegitimatePacketCount())
+                .arg(detSummary.u64ReceiveQueueOverflowCount()));
+        }
+        else if (msgMessage.typeMessage()
+            == NodeControlMessageType::AbnormalEventSnapshot)
+        {
+            const auto& detSnapshot = std::get<
+                AbnormalEventSnapshotControlDetails
+            >(msgMessage.varDetails());
+            for (const auto& detPacket : detSnapshot.vecPacketEvents())
+            {
+                m_stoObservations.resAppend(detPacket);
+            }
+            for (const auto& detFailure : detSnapshot.vecFailureEvents())
+            {
+                m_stoObservations.resAppend(detFailure);
+            }
+            scheduleObservationRefresh();
+        }
     }
 }
 
@@ -350,6 +441,38 @@ void UavMonitorNetworkController::sendHello()
     bSendControl(NodeControlMessage(
         ClientHelloControlDetails(TcpClientRole::Monitor)
     ));
+}
+
+void UavMonitorNetworkController::requestAbnormalSnapshot()
+{
+    bSendControl(NodeControlMessage(RequestControlDetails(
+        NodeControlMessageType::AbnormalEventSnapshotRequest,
+        strRequestId(QStringLiteral("monitor-abnormal-snapshot"))
+    )));
+}
+
+void UavMonitorNetworkController::appendObservation(
+    const AuthenticationObservation& varObservation
+)
+{
+    m_stoObservations.resAppend(varObservation);
+    scheduleObservationRefresh();
+}
+
+void UavMonitorNetworkController::scheduleObservationRefresh()
+{
+    if (m_bObservationRefreshScheduled)
+    {
+        return;
+    }
+
+    // 同一个TCP读取批次内可能包含大量事件，只在事件循环下一拍刷新一次模型。
+    m_bObservationRefreshScheduled = true;
+    QTimer::singleShot(0, this, [this]()
+    {
+        m_bObservationRefreshScheduled = false;
+        emit authenticationObservationsChanged();
+    });
 }
 
 void UavMonitorNetworkController::sendPing()

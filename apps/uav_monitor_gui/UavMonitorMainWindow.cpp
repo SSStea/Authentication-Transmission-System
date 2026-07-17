@@ -1,5 +1,7 @@
 #include "UavMonitorMainWindow.h"
 
+#include "AuthenticationMonitorWidget.h"
+
 #include <QDateTime>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -50,7 +52,8 @@ UavMonitorMainWindow::UavMonitorMainWindow(
       m_pReceiverValue(nullptr),
       m_pResponseValue(nullptr),
       m_pFileStatusEdit(nullptr),
-      m_pLogEdit(nullptr)
+      m_pLogEdit(nullptr),
+      m_pAuthenticationMonitor(nullptr)
 {
     setWindowTitle(QStringLiteral("TESLA 无人机广播节点监控"));
     resize(1220, 760);
@@ -66,20 +69,10 @@ UavMonitorMainWindow::UavMonitorMainWindow(
 
     QTabWidget* pTabs = new QTabWidget(pCentralWidget);
     pTabs->addTab(pCreateConnectionPage(), QStringLiteral("节点连接"));
-    pTabs->addTab(
-        pCreatePlaceholderPage(
-            QStringLiteral("报文与详情"),
-            QStringLiteral("阶段8通过MONITOR事件接入，不生成本地模拟报文。")
-        ),
-        QStringLiteral("报文")
+    m_pAuthenticationMonitor = new tesla::gui::AuthenticationMonitorWidget(
+        pTabs
     );
-    pTabs->addTab(
-        pCreatePlaceholderPage(
-            QStringLiteral("异常记录"),
-            QStringLiteral("阶段8实现异常筛选、索引和失败日志跳转。")
-        ),
-        QStringLiteral("异常")
-    );
+    pTabs->addTab(m_pAuthenticationMonitor, QStringLiteral("报文与异常"));
     pTabs->addTab(
         pCreatePlaceholderPage(
             QStringLiteral("计算开销"),
@@ -123,7 +116,14 @@ UavMonitorMainWindow::UavMonitorMainWindow(
         this,
         &UavMonitorMainWindow::appendFileStatus
     );
+    connect(
+        &m_ctlNetwork,
+        &UavMonitorNetworkController::authenticationObservationsChanged,
+        this,
+        &UavMonitorMainWindow::refreshAuthenticationViews
+    );
     refreshStatus();
+    refreshAuthenticationViews();
 }
 
 QWidget* UavMonitorMainWindow::pCreateConnectionPage()
@@ -261,6 +261,15 @@ void UavMonitorMainWindow::appendFileStatus(const QString& strMessage)
     m_pFileStatusEdit->append(
         QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz "))
         + strMessage
+    );
+}
+
+void UavMonitorMainWindow::refreshAuthenticationViews()
+{
+    m_pAuthenticationMonitor->setSnapshots(
+        m_ctlNetwork.vecPacketObservationSnapshot(),
+        m_ctlNetwork.vecFailureObservationSnapshot(),
+        m_ctlNetwork.vecDosSummarySnapshot()
     );
 }
 

@@ -1,5 +1,8 @@
 #include "PcNodeMainWindow.h"
 
+#include "AuthenticationMonitorWidget.h"
+#include "PcAuthenticationViews.h"
+
 #include <QDateTime>
 #include <QGridLayout>
 #include <QLabel>
@@ -35,7 +38,10 @@ PcNodeMainWindow::PcNodeMainWindow(
       m_pSenderValue(nullptr),
       m_pReceiverValue(nullptr),
       m_pFileStatusEdit(nullptr),
-      m_pLogEdit(nullptr)
+      m_pLogEdit(nullptr),
+      m_pAuthenticationMonitor(nullptr),
+      m_pKeyChainWidget(nullptr),
+      m_pMatrixWidget(nullptr)
 {
     setWindowTitle(QStringLiteral("TESLA PC广播节点"));
     resize(1220, 760);
@@ -52,40 +58,14 @@ PcNodeMainWindow::PcNodeMainWindow(
 
     QTabWidget* pTabs = new QTabWidget(pCentralWidget);
     pTabs->addTab(pCreateStatusPage(), QStringLiteral("节点状态"));
-    pTabs->addTab(
-        pCreatePlaceholderPage(
-            QStringLiteral("报文列表与详情"),
-            QStringLiteral("阶段8接入本地TX/RX报文事件，不显示模拟报文。")
-        ),
-        QStringLiteral("报文")
+    m_pAuthenticationMonitor = new tesla::gui::AuthenticationMonitorWidget(
+        pTabs
     );
-    pTabs->addTab(
-        pCreatePlaceholderPage(
-            QStringLiteral("异常记录"),
-            QStringLiteral("阶段8实现筛选、独立异常索引和双击跳转。")
-        ),
-        QStringLiteral("异常")
-    );
-    pTabs->addTab(
-        pCreatePlaceholderPage(
-            QStringLiteral("PC本地密钥链"),
-            QStringLiteral(
-                "仅在PC作为Sender时显示本地完整密钥链；"
-                "不得显示其他Sender的密钥链。阶段6接入。"
-            )
-        ),
-        QStringLiteral("密钥链")
-    );
-    pTabs->addTab(
-        pCreatePlaceholderPage(
-            QStringLiteral("坏包矩阵定位"),
-            QStringLiteral(
-                "仅在PC作为Receiver且发生改进TESLA回退时展示。"
-                "快速通过路径不执行矩阵计算。"
-            )
-        ),
-        QStringLiteral("矩阵")
-    );
+    pTabs->addTab(m_pAuthenticationMonitor, QStringLiteral("报文与异常"));
+    m_pKeyChainWidget = new PcLocalKeyChainWidget(pTabs);
+    pTabs->addTab(m_pKeyChainWidget, QStringLiteral("密钥链"));
+    m_pMatrixWidget = new PcMatrixLocationWidget(pTabs);
+    pTabs->addTab(m_pMatrixWidget, QStringLiteral("矩阵"));
     pTabs->addTab(pCreateFileStatusPage(), QStringLiteral("文件"));
     pTabs->addTab(pCreateLogPage(), QStringLiteral("日志"));
     pLayout->addWidget(pTabs, 1);
@@ -110,12 +90,25 @@ PcNodeMainWindow::PcNodeMainWindow(
         this,
         &PcNodeMainWindow::appendFileStatus
     );
+    connect(
+        &m_ctlNetwork,
+        &PcNodeNetworkController::authenticationObservationsChanged,
+        this,
+        &PcNodeMainWindow::refreshAuthenticationViews
+    );
+    connect(
+        &m_ctlNetwork,
+        &PcNodeNetworkController::localKeyChainChanged,
+        this,
+        &PcNodeMainWindow::refreshAuthenticationViews
+    );
 
     if (!m_ctlNetwork.bStart())
     {
         appendLog(QStringLiteral("PC节点网络服务启动失败"));
     }
     refreshStatus();
+    refreshAuthenticationViews();
 }
 
 QWidget* PcNodeMainWindow::pCreateStatusPage()
@@ -152,24 +145,6 @@ QWidget* PcNodeMainWindow::pCreateStatusPage()
     pHintLabel->setObjectName(QStringLiteral("hintLabel"));
     pLayout->addWidget(pHintLabel, 5, 0, 1, 2);
     pLayout->setRowStretch(6, 1);
-    return pPage;
-}
-
-QWidget* PcNodeMainWindow::pCreatePlaceholderPage(
-    const QString& strTitle,
-    const QString& strDescription
-)
-{
-    QWidget* pPage = new QWidget(this);
-    QVBoxLayout* pLayout = new QVBoxLayout(pPage);
-    QLabel* pTitleLabel = new QLabel(strTitle, pPage);
-    pTitleLabel->setObjectName(QStringLiteral("sectionTitleLabel"));
-    QLabel* pDescriptionLabel = new QLabel(strDescription, pPage);
-    pDescriptionLabel->setWordWrap(true);
-    pDescriptionLabel->setObjectName(QStringLiteral("hintLabel"));
-    pLayout->addWidget(pTitleLabel);
-    pLayout->addWidget(pDescriptionLabel);
-    pLayout->addStretch();
     return pPage;
 }
 
@@ -210,6 +185,22 @@ void PcNodeMainWindow::appendFileStatus(const QString& strMessage)
     m_pFileStatusEdit->append(
         QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz "))
         + strMessage
+    );
+}
+
+void PcNodeMainWindow::refreshAuthenticationViews()
+{
+    m_pAuthenticationMonitor->setSnapshots(
+        m_ctlNetwork.vecPacketObservationSnapshot(),
+        m_ctlNetwork.vecFailureObservationSnapshot(),
+        m_ctlNetwork.vecDosSummarySnapshot()
+    );
+    m_pKeyChainWidget->setKeyChain(
+        m_ctlNetwork.optLocalKeyChainSnapshot(),
+        m_ctlNetwork.optLocalKeyChainProgress()
+    );
+    m_pMatrixWidget->setGroups(
+        m_ctlNetwork.vecGroupObservationSnapshot()
     );
 }
 

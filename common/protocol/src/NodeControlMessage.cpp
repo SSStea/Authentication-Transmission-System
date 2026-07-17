@@ -37,7 +37,8 @@ RequestControlDetails::RequestControlDetails(
 {
     if (m_typeMessage != NodeControlMessageType::Ping
         && m_typeMessage != NodeControlMessageType::Pong
-        && m_typeMessage != NodeControlMessageType::StatusRequest)
+        && m_typeMessage != NodeControlMessageType::StatusRequest
+        && m_typeMessage != NodeControlMessageType::AbnormalEventSnapshotRequest)
     {
         throw std::invalid_argument("Request control details contain an unsupported type");
     }
@@ -207,6 +208,35 @@ NodeControlMessageType NodeControlMessage::typeMessage() const noexcept
     if (std::holds_alternative<AuthenticationRoundResultControlDetails>(m_varDetails))
     {
         return NodeControlMessageType::RoundResult;
+    }
+
+    if (std::holds_alternative<PacketObservationControlDetails>(m_varDetails))
+    {
+        return NodeControlMessageType::PacketObservationEvent;
+    }
+
+    if (std::holds_alternative<PacketFailureControlDetails>(m_varDetails))
+    {
+        return NodeControlMessageType::PacketFailureEvent;
+    }
+
+    if (std::holds_alternative<ImprovedGroupObservationControlDetails>(
+            m_varDetails
+        ))
+    {
+        return NodeControlMessageType::ImprovedGroupObservationEvent;
+    }
+
+    if (std::holds_alternative<DosSummaryControlDetails>(m_varDetails))
+    {
+        return NodeControlMessageType::DosSummaryEvent;
+    }
+
+    if (std::holds_alternative<AbnormalEventSnapshotControlDetails>(
+            m_varDetails
+        ))
+    {
+        return NodeControlMessageType::AbnormalEventSnapshot;
     }
 
     return NodeControlMessageType::ErrorResponse;

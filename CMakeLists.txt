@@ -49,6 +49,7 @@ add_subdirectory(common/metrics)
 add_subdirectory(apps/node_agent)
 
 if(BUILD_GUI)
+    add_subdirectory(apps/common_gui)
     add_subdirectory(apps/manager_gui)
     add_subdirectory(apps/pc_node_gui)
     add_subdirectory(apps/uav_monitor_gui)

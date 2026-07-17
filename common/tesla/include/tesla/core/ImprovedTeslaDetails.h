@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tesla/core/KsRsMatrix.h"
 #include "tesla/crypto/CryptoTypes.h"
 
 #include <cstddef>
@@ -52,7 +53,8 @@ public:
         bool bFastGroupTagMatched,
         std::vector<std::size_t> vecAuthenticatedPositions,
         std::vector<std::size_t> vecRejectedPositions,
-        bool bDetectionThresholdExceeded
+        bool bDetectionThresholdExceeded,
+        std::vector<KsRsLocationStep> vecLocationSteps = {}
     );
 
     bool bDetectionThresholdExceeded() const noexcept;
@@ -60,6 +62,7 @@ public:
     ImprovedVerificationPath pathVerification() const noexcept;
     const std::vector<std::size_t>& vecAuthenticatedPositions() const noexcept;
     const std::vector<std::size_t>& vecRejectedPositions() const noexcept;
+    const std::vector<KsRsLocationStep>& vecLocationSteps() const noexcept;
 
 private:
     ImprovedVerificationPath m_pathVerification;
@@ -67,5 +70,6 @@ private:
     std::vector<std::size_t> m_vecAuthenticatedPositions;
     std::vector<std::size_t> m_vecRejectedPositions;
     bool                     m_bDetectionThresholdExceeded;
+    std::vector<KsRsLocationStep> m_vecLocationSteps;
 };
 }

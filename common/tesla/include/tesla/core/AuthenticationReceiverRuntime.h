@@ -2,6 +2,7 @@
 
 #include "tesla/core/AuthenticationRuntimeTypes.h"
 #include "tesla/core/ReceiverAuthenticationContextStore.h"
+#include "tesla/protocol/MonitorControl.h"
 #include "tesla/protocol/ProtocolTypes.h"
 
 #include <cstdint>
@@ -22,8 +23,14 @@ class AuthenticationReceiverRuntime final
 {
 public:
     using ResultHandler = std::function<void(const AuthenticationRuntimeResult&)>;
+    using ObservationHandler = std::function<void(
+        const protocol::AuthenticationObservation&
+    )>;
 
-    explicit AuthenticationReceiverRuntime(ResultHandler fnResultHandler);
+    explicit AuthenticationReceiverRuntime(
+        ResultHandler fnResultHandler,
+        ObservationHandler fnObservationHandler = {}
+    );
     ~AuthenticationReceiverRuntime();
 
     AuthenticationReceiverRuntime(const AuthenticationReceiverRuntime&) = delete;

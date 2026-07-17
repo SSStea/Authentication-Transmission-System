@@ -1,7 +1,9 @@
 #pragma once
 
 #include "tesla/core/AuthenticationRuntimeTypes.h"
+#include "tesla/core/LocalSenderKeyChainObservation.h"
 #include "tesla/core/SenderAuthenticationContext.h"
+#include "tesla/protocol/MonitorControl.h"
 #include "tesla/protocol/ProtocolTypes.h"
 #include "tesla/workload/FileWorkload.h"
 #include "tesla/workload/TextWorkload.h"
@@ -30,10 +32,19 @@ class AuthenticationSenderRuntime final
 public:
     using DatagramSender = std::function<bool(const protocol::ByteBuffer&)>;
     using ResultHandler = std::function<void(const AuthenticationRuntimeResult&)>;
+    using ObservationHandler = std::function<void(
+        const protocol::AuthenticationObservation&
+    )>;
+    using LocalKeyChainHandler = std::function<void(
+        const LocalSenderKeyChainObservation&
+    )>;
 
     AuthenticationSenderRuntime(
         DatagramSender fnDatagramSender,
-        ResultHandler fnResultHandler
+        ResultHandler fnResultHandler,
+        ObservationHandler fnObservationHandler = {},
+        LocalKeyChainHandler fnLocalKeyChainHandler = {},
+        std::string strLocalIpAddress = {}
     );
     ~AuthenticationSenderRuntime();
 

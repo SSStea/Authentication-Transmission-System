@@ -159,7 +159,8 @@ TeslaVerificationResult ImprovedTeslaStrategy::vfyVerify(
             false,
             resKsRs.vecGoodPositions(),
             resKsRs.vecBadPositions(),
-            resKsRs.bDetectionThresholdExceeded()
+            resKsRs.bDetectionThresholdExceeded(),
+            resKsRs.vecLocationSteps()
         )
     );
 }

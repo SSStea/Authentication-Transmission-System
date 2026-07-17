@@ -13,6 +13,11 @@
 #include <unistd.h>
 
 #include <array>
+#include <algorithm>
+#include <cstddef>
+#include <condition_variable>
+#include <deque>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -23,6 +28,8 @@ namespace
 {
 constexpr int MAX_PENDING_CONNECTIONS = 32;
 constexpr std::size_t MAX_CLIENTS = 32;
+constexpr std::size_t MAX_MONITOR_EVENT_QUEUE = 4096;
+constexpr std::size_t ABNORMAL_SNAPSHOT_BATCH_SIZE = 64;
 
 void closeSocket(std::atomic<int>& nSocket) noexcept
 {
@@ -131,14 +138,16 @@ TcpManagementServer::TcpManagementServer(
     std::string strNodeName,
     RuntimeStateProvider fnStateProvider,
     ControlMessageHandler fnControlMessageHandler,
-    FilePayloadHandler fnFilePayloadHandler
+    FilePayloadHandler fnFilePayloadHandler,
+    AbnormalSnapshotProvider fnAbnormalSnapshotProvider
 )
     : m_strBindAddress(std::move(strBindAddress)),
       m_u16Port(u16Port),
       m_strNodeName(std::move(strNodeName)),
       m_fnStateProvider(std::move(fnStateProvider)),
       m_fnControlMessageHandler(std::move(fnControlMessageHandler)),
-      m_fnFilePayloadHandler(std::move(fnFilePayloadHandler))
+      m_fnFilePayloadHandler(std::move(fnFilePayloadHandler)),
+      m_fnAbnormalSnapshotProvider(std::move(fnAbnormalSnapshotProvider))
 {
     if (!m_fnStateProvider)
     {
@@ -156,6 +165,13 @@ TcpManagementServer::TcpManagementServer(
     {
         throw std::invalid_argument(
             "TCP management server requires a file payload handler"
+        );
+    }
+
+    if (!m_fnAbnormalSnapshotProvider)
+    {
+        throw std::invalid_argument(
+            "TCP management server requires an abnormal snapshot provider"
         );
     }
 }
@@ -204,6 +220,10 @@ void TcpManagementServer::start()
     try
     {
         m_thrAccept = std::thread(&TcpManagementServer::acceptLoop, this);
+        m_thrMonitorBroadcast = std::thread(
+            &TcpManagementServer::monitorBroadcastLoop,
+            this
+        );
     }
     catch (...)
     {
@@ -215,11 +235,21 @@ void TcpManagementServer::start()
 void TcpManagementServer::stop() noexcept
 {
     m_bRunning = false;
+    {
+        std::lock_guard<std::mutex> lckQueue(m_mtxMonitorQueue);
+        m_deqMonitorQueue.clear();
+    }
+    m_cndMonitorQueue.notify_all();
     closeSocket(m_nListenSocket);
 
     if (m_thrAccept.joinable())
     {
         m_thrAccept.join();
+    }
+
+    if (m_thrMonitorBroadcast.joinable())
+    {
+        m_thrMonitorBroadcast.join();
     }
 
     {
@@ -241,6 +271,10 @@ void TcpManagementServer::stop() noexcept
     std::lock_guard<std::mutex> lckClients(m_mtxClients);
     m_vecClientThreads.clear();
     m_vecClients.clear();
+    {
+        std::lock_guard<std::mutex> lckQueue(m_mtxMonitorQueue);
+        m_deqMonitorQueue.clear();
+    }
 }
 
 bool TcpManagementServer::bIsRunning() const noexcept
@@ -282,6 +316,104 @@ void TcpManagementServer::broadcastControlMessage(
     }
 }
 
+void TcpManagementServer::enqueueMonitorObservation(
+    const protocol::AuthenticationObservation& varObservation
+) noexcept
+{
+    try
+    {
+        const protocol::NodeControlMessage msgObservation = std::visit(
+            [](const auto& detObservation)
+            {
+                return protocol::NodeControlMessage(detObservation);
+            },
+            varObservation
+        );
+
+        std::lock_guard<std::mutex> lckQueue(m_mtxMonitorQueue);
+        if (m_deqMonitorQueue.size() >= MAX_MONITOR_EVENT_QUEUE)
+        {
+            if (msgObservation.typeMessage()
+                    == protocol::NodeControlMessageType::PacketFailureEvent)
+            {
+                // 队列拥塞时优先保留结构化失败；普通报文仍受服务端快照/缓存边界约束。
+                const auto itNormalPacket = std::find_if(
+                    m_deqMonitorQueue.begin(),
+                    m_deqMonitorQueue.end(),
+                    [](const protocol::NodeControlMessage& msgQueued)
+                    {
+                        return msgQueued.typeMessage()
+                            == protocol::NodeControlMessageType::PacketObservationEvent;
+                    }
+                );
+                if (itNormalPacket != m_deqMonitorQueue.end())
+                {
+                    m_deqMonitorQueue.erase(itNormalPacket);
+                    m_deqMonitorQueue.push_back(msgObservation);
+                    ++m_nDroppedMonitorEventCount;
+                    m_cndMonitorQueue.notify_one();
+                    return;
+                }
+            }
+
+            ++m_nDroppedMonitorEventCount;
+            return;
+        }
+
+        m_deqMonitorQueue.push_back(msgObservation);
+        m_cndMonitorQueue.notify_one();
+    }
+    catch (...)
+    {
+        ++m_nDroppedMonitorEventCount;
+    }
+}
+
+void TcpManagementServer::monitorBroadcastLoop()
+{
+    while (true)
+    {
+        std::optional<protocol::NodeControlMessage> optMessage;
+        {
+            std::unique_lock<std::mutex> lckQueue(m_mtxMonitorQueue);
+            m_cndMonitorQueue.wait(
+                lckQueue,
+                [this]()
+                {
+                    return !m_bRunning.load() || !m_deqMonitorQueue.empty();
+                }
+            );
+            if (!m_bRunning.load() && m_deqMonitorQueue.empty())
+            {
+                return;
+            }
+
+            optMessage = std::move(m_deqMonitorQueue.front());
+            m_deqMonitorQueue.pop_front();
+        }
+
+        std::vector<std::shared_ptr<ClientConnection>> vecClients;
+        {
+            std::lock_guard<std::mutex> lckClients(m_mtxClients);
+            vecClients = m_vecClients;
+        }
+
+        for (const std::shared_ptr<ClientConnection>& ptrClient : vecClients)
+        {
+            if (!ptrClient->bHelloReceived()
+                || ptrClient->roleClient() != protocol::TcpClientRole::Monitor)
+            {
+                continue;
+            }
+
+            if (!bSendControlMessage(ptrClient, optMessage.value()))
+            {
+                closeSocket(ptrClient->atmSocket());
+            }
+        }
+    }
+}
+
 void TcpManagementServer::acceptLoop()
 {
     while (m_bRunning.load())
@@ -309,6 +441,15 @@ void TcpManagementServer::acceptLoop()
             close(nClientSocket);
             break;
         }
+
+        const timeval tvSendTimeout{0, 200000};
+        setsockopt(
+            nClientSocket,
+            SOL_SOCKET,
+            SO_SNDTIMEO,
+            &tvSendTimeout,
+            sizeof(tvSendTimeout)
+        );
 
         std::lock_guard<std::mutex> lckClients(m_mtxClients);
         std::size_t nConnected = 0;
@@ -636,6 +777,88 @@ bool TcpManagementServer::bHandleFrame(
                 u64NowMilliseconds()
             ))
         );
+    }
+
+    if (msgMessage.typeMessage()
+        == protocol::NodeControlMessageType::AbnormalEventSnapshotRequest)
+    {
+        const std::string& strRequestId = std::get<
+            protocol::RequestControlDetails
+        >(msgMessage.varDetails()).strRequestId();
+        if (roleClient != protocol::TcpClientRole::Monitor)
+        {
+            return bSendControlMessage(
+                ptrClient,
+                protocol::NodeControlMessage(
+                    protocol::ErrorResponseControlDetails(
+                        strRequestId,
+                        "SNAPSHOT_MONITOR_ONLY",
+                        "Only MONITOR clients may request abnormal snapshots"
+                    )
+                )
+            );
+        }
+
+        const AbnormalSnapshot prSnapshot = m_fnAbnormalSnapshotProvider();
+        const auto& vecPackets = prSnapshot.first;
+        const auto& vecFailures = prSnapshot.second;
+        const std::size_t nBatchCount = std::max<std::size_t>(
+            1,
+            std::max(
+                (vecPackets.size() + ABNORMAL_SNAPSHOT_BATCH_SIZE - 1U)
+                    / ABNORMAL_SNAPSHOT_BATCH_SIZE,
+                (vecFailures.size() + ABNORMAL_SNAPSHOT_BATCH_SIZE - 1U)
+                    / ABNORMAL_SNAPSHOT_BATCH_SIZE
+            )
+        );
+        for (std::size_t nBatchIndex = 0;
+             nBatchIndex < nBatchCount;
+             ++nBatchIndex)
+        {
+            const std::size_t nFirst =
+                nBatchIndex * ABNORMAL_SNAPSHOT_BATCH_SIZE;
+            const std::size_t nPacketLast = std::min(
+                vecPackets.size(),
+                nFirst + ABNORMAL_SNAPSHOT_BATCH_SIZE
+            );
+            const std::size_t nLast = std::min(
+                vecFailures.size(),
+                nFirst + ABNORMAL_SNAPSHOT_BATCH_SIZE
+            );
+            std::vector<protocol::PacketObservationControlDetails> vecPacketBatch;
+            if (nFirst < nPacketLast)
+            {
+                vecPacketBatch.assign(
+                    vecPackets.begin() + static_cast<std::ptrdiff_t>(nFirst),
+                    vecPackets.begin() + static_cast<std::ptrdiff_t>(nPacketLast)
+                );
+            }
+            std::vector<protocol::PacketFailureControlDetails> vecBatch;
+            if (nFirst < nLast)
+            {
+                vecBatch.assign(
+                    vecFailures.begin() + static_cast<std::ptrdiff_t>(nFirst),
+                    vecFailures.begin() + static_cast<std::ptrdiff_t>(nLast)
+                );
+            }
+
+            if (!bSendControlMessage(
+                    ptrClient,
+                    protocol::NodeControlMessage(
+                        protocol::AbnormalEventSnapshotControlDetails(
+                            strRequestId,
+                            static_cast<std::uint32_t>(nBatchIndex + 1U),
+                            nBatchIndex + 1U == nBatchCount,
+                            std::move(vecPacketBatch),
+                            std::move(vecBatch)
+                        )
+                    )
+                ))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     if (msgMessage.typeMessage()

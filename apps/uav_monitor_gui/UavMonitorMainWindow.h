@@ -10,6 +10,10 @@ class QLabel;
 class QLineEdit;
 class QSpinBox;
 class QTextEdit;
+namespace tesla::gui
+{
+class AuthenticationMonitorWidget;
+}
 
 /** @brief 无人机广播节点监控GUI阶段5主窗口。 */
 class UavMonitorMainWindow final : public QMainWindow
@@ -33,6 +37,7 @@ private:
     void refreshStatus();
     void appendLog(const QString& strMessage);
     void appendFileStatus(const QString& strMessage);
+    void refreshAuthenticationViews();
     void applyStyle();
 
     UavMonitorNetworkController m_ctlNetwork;
@@ -45,4 +50,5 @@ private:
     QLabel*                     m_pResponseValue;
     QTextEdit*                  m_pFileStatusEdit;
     QTextEdit*                  m_pLogEdit;
+    tesla::gui::AuthenticationMonitorWidget* m_pAuthenticationMonitor;
 };

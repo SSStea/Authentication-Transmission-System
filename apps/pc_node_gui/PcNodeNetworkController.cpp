@@ -221,7 +221,63 @@ PcNodeNetworkController::PcNodeNetworkController(
             {
                 return stsQueryTimeSynchronization();
             },
-            bPersistRecoveredFile
+            bPersistRecoveredFile,
+            [this](const tesla::protocol::AuthenticationObservation&)
+            {
+                // 高频算法事件只合并为一次Qt刷新通知，模型从线程安全快照读取。
+                if (m_bObservationRefreshScheduled.exchange(true))
+                {
+                    return;
+                }
+                QMetaObject::invokeMethod(
+                    this,
+                    [this]()
+                    {
+                        m_bObservationRefreshScheduled = false;
+                        emit authenticationObservationsChanged();
+                    },
+                    Qt::QueuedConnection
+                );
+            },
+            [this](
+                const tesla::core::LocalSenderKeyChainObservation&
+                    varKeyChain
+            )
+            {
+                {
+                    std::lock_guard<std::mutex> lckKeyChain(
+                        m_mtxLocalKeyChain
+                    );
+                    if (const auto* pSnapshot = std::get_if<
+                            tesla::core::LocalSenderKeyChainSnapshot
+                        >(&varKeyChain))
+                    {
+                        m_optLocalKeyChainSnapshot = *pSnapshot;
+                        m_optLocalKeyChainProgress.reset();
+                    }
+                    else
+                    {
+                        m_optLocalKeyChainProgress = std::get<
+                            tesla::core::LocalSenderKeyChainProgress
+                        >(varKeyChain);
+                    }
+                }
+
+                if (m_bKeyChainRefreshScheduled.exchange(true))
+                {
+                    return;
+                }
+                QMetaObject::invokeMethod(
+                    this,
+                    [this]()
+                    {
+                        m_bKeyChainRefreshScheduled = false;
+                        emit localKeyChainChanged();
+                    },
+                    Qt::QueuedConnection
+                );
+            },
+            m_adrLocalAddress.toString().toStdString()
         );
 
     m_pHeartbeatTimer->setInterval(
@@ -396,6 +452,53 @@ const QString& PcNodeNetworkController::strNodeName() const noexcept
 std::uint16_t PcNodeNetworkController::u16ManagementPort() const noexcept
 {
     return m_u16ManagementPort;
+}
+
+std::vector<tesla::protocol::PacketObservationControlDetails>
+PcNodeNetworkController::vecPacketObservationSnapshot() const
+{
+    return m_ptrAuthenticationRuntime
+        ? m_ptrAuthenticationRuntime->vecPacketObservationSnapshot()
+        : std::vector<tesla::protocol::PacketObservationControlDetails>();
+}
+
+std::vector<tesla::protocol::PacketFailureControlDetails>
+PcNodeNetworkController::vecFailureObservationSnapshot() const
+{
+    return m_ptrAuthenticationRuntime
+        ? m_ptrAuthenticationRuntime->vecFailureObservationSnapshot()
+        : std::vector<tesla::protocol::PacketFailureControlDetails>();
+}
+
+std::vector<tesla::protocol::ImprovedGroupObservationControlDetails>
+PcNodeNetworkController::vecGroupObservationSnapshot() const
+{
+    return m_ptrAuthenticationRuntime
+        ? m_ptrAuthenticationRuntime->vecGroupObservationSnapshot()
+        : std::vector<
+            tesla::protocol::ImprovedGroupObservationControlDetails>();
+}
+
+std::vector<tesla::protocol::DosSummaryControlDetails>
+PcNodeNetworkController::vecDosSummarySnapshot() const
+{
+    return m_ptrAuthenticationRuntime
+        ? m_ptrAuthenticationRuntime->vecDosSummarySnapshot()
+        : std::vector<tesla::protocol::DosSummaryControlDetails>();
+}
+
+std::optional<tesla::core::LocalSenderKeyChainSnapshot>
+PcNodeNetworkController::optLocalKeyChainSnapshot() const
+{
+    std::lock_guard<std::mutex> lckKeyChain(m_mtxLocalKeyChain);
+    return m_optLocalKeyChainSnapshot;
+}
+
+std::optional<tesla::core::LocalSenderKeyChainProgress>
+PcNodeNetworkController::optLocalKeyChainProgress() const
+{
+    std::lock_guard<std::mutex> lckKeyChain(m_mtxLocalKeyChain);
+    return m_optLocalKeyChainProgress;
 }
 
 void PcNodeNetworkController::acceptPendingClients()
