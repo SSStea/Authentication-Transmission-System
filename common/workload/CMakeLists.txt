@@ -1,8 +1,10 @@
 set(TESLA_WORKLOAD_HEADERS
+    include/tesla/workload/FileWorkload.h
     include/tesla/workload/TextWorkload.h
 )
 
 set(TESLA_WORKLOAD_SOURCES
+    src/FileWorkload.cpp
     src/TextWorkload.cpp
 )
 

@@ -32,6 +32,11 @@ public:
         const SenderAuthenticationMaterial& matMaterial,
         std::string strSenderIpAddress
     ) const;
+    ReceiverAuthenticationContext ctxCreateReceiverContext(
+        const SenderAuthenticationMaterial& matMaterial,
+        std::string strSenderIpAddress,
+        ReceiverPayloadDetails varPayloadDetails
+    ) const;
 
 private:
     static std::uint64_t u64DecodeChainId(

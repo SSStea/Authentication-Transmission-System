@@ -103,6 +103,35 @@ crypto::ByteBuffer vecMap(const protocol::BinaryBlock& arrBlock)
     return crypto::ByteBuffer(arrBlock.begin(), arrBlock.end());
 }
 
+protocol::BinaryBlock arrMap(const crypto::Digest& digValue)
+{
+    protocol::BinaryBlock arrResult{};
+    std::copy(digValue.begin(), digValue.end(), arrResult.begin());
+    return arrResult;
+}
+
+ReceiverPayloadDetails varMapReceiverPayload(
+    const protocol::ReceiverPayloadControlDetails& varPayloadDetails
+)
+{
+    if (std::holds_alternative<
+            protocol::TextReceiverPayloadControlDetails
+        >(varPayloadDetails))
+    {
+        return TextReceiverPayloadDetails(
+            std::get<protocol::TextReceiverPayloadControlDetails>(
+                varPayloadDetails
+            ).u32RepeatCount()
+        );
+    }
+
+    return FileReceiverPayloadDetails(
+        std::get<protocol::FileReceiverPayloadControlDetails>(
+            varPayloadDetails
+        ).u64OriginalByteCount()
+    );
+}
+
 protocol::AuthenticationRoundResultStatus statusMap(
     AuthenticationRuntimeResultStatus statusResult
 )
@@ -175,13 +204,15 @@ public:
         std::string strNodeName,
         DatagramSender fnDatagramSender,
         ControlEventHandler fnControlEventHandler,
-        TimeSynchronizationProvider fnTimeSynchronizationProvider
+        TimeSynchronizationProvider fnTimeSynchronizationProvider,
+        RecoveredFileHandler fnRecoveredFileHandler
     )
         : m_strNodeName(std::move(strNodeName)),
           m_fnControlEventHandler(std::move(fnControlEventHandler)),
           m_fnTimeSynchronizationProvider(
               std::move(fnTimeSynchronizationProvider)
           ),
+          m_fnRecoveredFileHandler(std::move(fnRecoveredFileHandler)),
           m_runSender(
               std::move(fnDatagramSender),
               [this](const AuthenticationRuntimeResult& resResult)
@@ -305,6 +336,77 @@ public:
                     "UNSUPPORTED_AUTH_CONTROL",
                     "Authentication runtime received an unsupported control message"
                 )
+            );
+        }
+    }
+
+    protocol::NodeControlMessage msgApplyFilePayload(
+        protocol::TcpClientRole roleClient,
+        const std::string& strRequestId,
+        std::uint64_t u64ChainId,
+        workload::FileWorkload wrkFile
+    )
+    {
+        if (roleClient == protocol::TcpClientRole::Monitor)
+        {
+            return msgConfigAcknowledgement(
+                strRequestId,
+                protocol::AuthenticationConfigTarget::FilePayload,
+                false,
+                "MONITOR_FILE_FORBIDDEN",
+                "Monitor clients cannot upload authentication files"
+            );
+        }
+
+        try
+        {
+            std::lock_guard<std::mutex> lckConfig(m_mtxConfig);
+            if (!m_optSenderContext.has_value())
+            {
+                throw std::logic_error(
+                    "Sender authentication configuration is missing"
+                );
+            }
+
+            const SenderAuthenticationMaterial& matMaterial =
+                m_optSenderContext->matMaterial();
+            if (matMaterial.u64ChainId() != u64ChainId)
+            {
+                throw std::invalid_argument(
+                    "File payload chain ID does not match the sender context"
+                );
+            }
+
+            if (matMaterial.prmRoundParameters().modePayload()
+                    != AuthenticationPayloadMode::File
+                || wrkFile.u32PacketCount()
+                    != matMaterial.prmRoundParameters().u32TotalPacketCount())
+            {
+                throw std::invalid_argument(
+                    "File payload size does not match the sender configuration"
+                );
+            }
+
+            m_runSender.configure(
+                m_optSenderContext.value(),
+                SenderPayloadWorkload(std::move(wrkFile))
+            );
+            return msgConfigAcknowledgement(
+                strRequestId,
+                protocol::AuthenticationConfigTarget::FilePayload,
+                true,
+                "",
+                "File payload accepted and sender schedule prepared"
+            );
+        }
+        catch (const std::exception& exError)
+        {
+            return msgConfigAcknowledgement(
+                strRequestId,
+                protocol::AuthenticationConfigTarget::FilePayload,
+                false,
+                "INVALID_FILE_PAYLOAD",
+                exError.what()
             );
         }
     }
@@ -434,8 +536,9 @@ private:
                 );
 
             std::lock_guard<std::mutex> lckConfig(m_mtxConfig);
+            // 新链配置先使旧载荷失效，必须收到同一chainId的新载荷后才能启动。
+            m_runSender.resetConfiguration();
             m_optSenderContext = std::move(ctxCandidate);
-            m_optTextWorkload.reset();
             return msgConfigAcknowledgement(
                 detConfig.strRequestId(),
                 protocol::AuthenticationConfigTarget::Sender,
@@ -479,7 +582,8 @@ private:
                     detContext.strSenderIpAddress(),
                     detContext.u64ChainId(),
                     digMap(detContext.arrCommitmentKey()),
-                    prmMap(detContext.prmRoundParameters())
+                    prmMap(detContext.prmRoundParameters()),
+                    varMapReceiverPayload(detContext.varPayloadDetails())
                 );
             }
 
@@ -533,9 +637,8 @@ private:
             );
             m_runSender.configure(
                 m_optSenderContext.value(),
-                wrkCandidate
+                SenderPayloadWorkload(std::move(wrkCandidate))
             );
-            m_optTextWorkload = std::move(wrkCandidate);
 
             return msgConfigAcknowledgement(
                 detPayload.strRequestId(),
@@ -682,20 +785,86 @@ private:
     {
         try
         {
+            protocol::AuthenticationRoundResultStatus statusResult = statusMap(
+                resResult.statusResult()
+            );
+            std::string strMessage = resResult.strMessage();
+            protocol::AuthenticationRoundResultDetails varResultDetails =
+                protocol::TextAuthenticationRoundResultDetails("");
+
+            if (std::holds_alternative<TextAuthenticationRuntimeResultDetails>(
+                    resResult.varResultDetails()
+                ))
+            {
+                varResultDetails =
+                    protocol::TextAuthenticationRoundResultDetails(
+                        std::get<TextAuthenticationRuntimeResultDetails>(
+                            resResult.varResultDetails()
+                        ).strRecoveredText()
+                    );
+            }
+            else if (std::holds_alternative<
+                FileSenderAuthenticationRuntimeResultDetails
+            >(resResult.varResultDetails()))
+            {
+                varResultDetails =
+                    protocol::FileSenderAuthenticationRoundResultDetails(
+                        std::get<
+                            FileSenderAuthenticationRuntimeResultDetails
+                        >(resResult.varResultDetails()).u64OriginalByteCount()
+                    );
+            }
+            else
+            {
+                const FileReceiverAuthenticationRuntimeResultDetails& detFile =
+                    std::get<FileReceiverAuthenticationRuntimeResultDetails>(
+                        resResult.varResultDetails()
+                );
+                if (resResult.statusResult()
+                        == AuthenticationRuntimeResultStatus::Completed
+                    && (!m_fnRecoveredFileHandler
+                        || !m_fnRecoveredFileHandler(
+                            resResult.strRoundId(),
+                            resResult.strSenderId(),
+                            resResult.u64ChainId(),
+                            detFile.vecRecoveredFileBytes()
+                        )))
+                {
+                    statusResult = protocol::AuthenticationRoundResultStatus::
+                        ProtocolIncomplete;
+                    strMessage =
+                        "Receiver authenticated the file but atomic persistence failed";
+                }
+
+                std::optional<protocol::BinaryBlock> optRecoveredSha256;
+                if (detFile.optRecoveredSha256().has_value())
+                {
+                    optRecoveredSha256 = arrMap(
+                        detFile.optRecoveredSha256().value()
+                    );
+                }
+                varResultDetails =
+                    protocol::FileReceiverAuthenticationRoundResultDetails(
+                        detFile.u64OriginalByteCount(),
+                        detFile.vecRecoveredFileBytes().size(),
+                        std::move(optRecoveredSha256)
+                    );
+            }
+
             m_fnControlEventHandler(protocol::NodeControlMessage(
                 protocol::AuthenticationRoundResultControlDetails(
                     resResult.strRoundId(),
                     resResult.strSenderId(),
                     resResult.u64ChainId(),
                     roleResult,
-                    statusMap(resResult.statusResult()),
+                    statusResult,
                     resResult.u32ExpectedPacketCount(),
                     resResult.u32ReceivedPacketCount(),
                     resResult.u32AuthenticatedPacketCount(),
                     resResult.u32FailedPacketCount(),
                     resResult.u32MissingPacketCount(),
-                    resResult.strRecoveredText(),
-                    resResult.strMessage()
+                    std::move(varResultDetails),
+                    std::move(strMessage)
                 )
             ));
         }
@@ -708,9 +877,9 @@ private:
     std::string m_strNodeName;
     ControlEventHandler m_fnControlEventHandler;
     TimeSynchronizationProvider m_fnTimeSynchronizationProvider;
+    RecoveredFileHandler m_fnRecoveredFileHandler;
     mutable std::mutex m_mtxConfig;
     std::optional<SenderAuthenticationContext> m_optSenderContext;
-    std::optional<workload::TextWorkload> m_optTextWorkload;
     AuthenticationSenderRuntime m_runSender;
     AuthenticationReceiverRuntime m_runReceiver;
 };
@@ -719,13 +888,15 @@ AuthenticationNodeRuntime::AuthenticationNodeRuntime(
     std::string strNodeName,
     DatagramSender fnDatagramSender,
     ControlEventHandler fnControlEventHandler,
-    TimeSynchronizationProvider fnTimeSynchronizationProvider
+    TimeSynchronizationProvider fnTimeSynchronizationProvider,
+    RecoveredFileHandler fnRecoveredFileHandler
 )
     : m_ptrImpl(std::make_unique<Impl>(
           std::move(strNodeName),
           std::move(fnDatagramSender),
           std::move(fnControlEventHandler),
-          std::move(fnTimeSynchronizationProvider)
+          std::move(fnTimeSynchronizationProvider),
+          std::move(fnRecoveredFileHandler)
       ))
 {
 }
@@ -738,6 +909,21 @@ protocol::NodeControlMessage AuthenticationNodeRuntime::msgHandleControl(
 )
 {
     return m_ptrImpl->msgHandleControl(roleClient, msgMessage);
+}
+
+protocol::NodeControlMessage AuthenticationNodeRuntime::msgApplyFilePayload(
+    protocol::TcpClientRole roleClient,
+    const std::string& strRequestId,
+    std::uint64_t u64ChainId,
+    workload::FileWorkload wrkFile
+)
+{
+    return m_ptrImpl->msgApplyFilePayload(
+        roleClient,
+        strRequestId,
+        u64ChainId,
+        std::move(wrkFile)
+    );
 }
 
 bool AuthenticationNodeRuntime::bHandleDatagram(

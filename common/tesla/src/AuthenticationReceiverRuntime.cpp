@@ -11,6 +11,7 @@
 #include "tesla/crypto/OpenSslCryptoProvider.h"
 #include "tesla/protocol/UdpAuthenticationPacket.h"
 #include "tesla/protocol/UdpAuthenticationPacketCodec.h"
+#include "tesla/workload/FileWorkload.h"
 
 #include <algorithm>
 #include <chrono>
@@ -36,7 +37,7 @@ namespace
 using ContextKey = std::pair<std::string, std::uint64_t>;
 
 constexpr std::size_t MAX_QUEUED_DATAGRAMS = 8192;
-constexpr std::uint32_t MAX_STAGE6_PACKET_COUNT = 200000;
+constexpr std::uint32_t MAX_AUTHENTICATION_PACKET_COUNT = 200000;
 
 std::uint64_t u64NowMilliseconds()
 {
@@ -187,17 +188,11 @@ public:
         {
             const AuthenticationRoundParameters& prmRound =
                 ctxContext.prmRoundParameters();
-            if (prmRound.modePayload() != AuthenticationPayloadMode::Text)
+            if (prmRound.u32TotalPacketCount()
+                > MAX_AUTHENTICATION_PACKET_COUNT)
             {
                 throw std::invalid_argument(
-                    "Stage6 receiver runtime only accepts text contexts"
-                );
-            }
-
-            if (prmRound.u32TotalPacketCount() > MAX_STAGE6_PACKET_COUNT)
-            {
-                throw std::invalid_argument(
-                    "Stage6 receiver packet count exceeds the bounded runtime"
+                    "Receiver packet count exceeds the bounded runtime"
                 );
             }
 
@@ -1088,11 +1083,44 @@ private:
         const std::uint32_t u32Expected = prmRound.u32TotalPacketCount();
         const std::uint32_t u32Missing =
             u32Expected - staReceiver.u32ReceivedPacketCount;
-        const std::string strRecoveredPayload = strRecoveredText(staReceiver);
+
+        AuthenticationRuntimeResultDetails varResultDetails =
+            varIncompletePayloadDetails(staReceiver);
+        bool bPayloadRecovered = false;
+        if (u32Authenticated == u32Expected
+            && u32Failed == 0
+            && u32Missing == 0
+            && !staReceiver.bProtocolIncomplete)
+        {
+            try
+            {
+                if (prmRound.modePayload() == AuthenticationPayloadMode::Text)
+                {
+                    const std::string strRecoveredPayload =
+                        strRecoveredText(staReceiver);
+                    bPayloadRecovered = !strRecoveredPayload.empty();
+                    varResultDetails = TextAuthenticationRuntimeResultDetails(
+                        strRecoveredPayload
+                    );
+                }
+                else
+                {
+                    varResultDetails = varRecoverFileDetails(staReceiver);
+                    bPayloadRecovered = true;
+                }
+            }
+            catch (const std::exception&)
+            {
+                staReceiver.bProtocolIncomplete = true;
+            }
+        }
 
         AuthenticationRuntimeResultStatus statusResult =
             AuthenticationRuntimeResultStatus::Completed;
-        std::string strMessage = "Receiver authenticated the complete text round";
+        std::string strMessage = prmRound.modePayload()
+                == AuthenticationPayloadMode::Text
+            ? "Receiver authenticated the complete text round"
+            : "Receiver authenticated and recovered the complete file";
 
         if (staReceiver.bProtocolIncomplete)
         {
@@ -1102,10 +1130,13 @@ private:
         else if (u32Authenticated != u32Expected
             || u32Failed > 0
             || u32Missing > 0
-            || strRecoveredPayload.empty())
+            || !bPayloadRecovered)
         {
             statusResult = AuthenticationRuntimeResultStatus::AuthenticationFailed;
-            strMessage = "Receiver did not authenticate every expected text packet";
+            strMessage = prmRound.modePayload()
+                    == AuthenticationPayloadMode::Text
+                ? "Receiver did not authenticate every expected text packet"
+                : "Receiver did not authenticate every expected file packet";
         }
 
         updateGlobalRunningLocked();
@@ -1119,7 +1150,7 @@ private:
             u32Authenticated,
             u32Failed,
             u32Missing,
-            strRecoveredPayload,
+            std::move(varResultDetails),
             std::move(strMessage)
         );
     }
@@ -1151,7 +1182,7 @@ private:
             u32Authenticated,
             u32Failed,
             u32Expected - staReceiver.u32ReceivedPacketCount,
-            strRecoveredText(staReceiver),
+            varIncompletePayloadDetails(staReceiver),
             strMessage
         );
     }
@@ -1204,6 +1235,78 @@ private:
         }
 
         return strText;
+    }
+
+    AuthenticationRuntimeResultDetails varIncompletePayloadDetails(
+        const ReceiverState& staReceiver
+    ) const
+    {
+        if (staReceiver.ctxContext.prmRoundParameters().modePayload()
+            == AuthenticationPayloadMode::Text)
+        {
+            return TextAuthenticationRuntimeResultDetails(
+                strRecoveredText(staReceiver)
+            );
+        }
+
+        const std::uint64_t u64OriginalByteCount = std::get<
+            FileReceiverPayloadDetails
+        >(staReceiver.ctxContext.varPayloadDetails()).u64OriginalByteCount();
+        return FileReceiverAuthenticationRuntimeResultDetails(
+            u64OriginalByteCount,
+            {},
+            std::nullopt
+        );
+    }
+
+    AuthenticationRuntimeResultDetails varRecoverFileDetails(
+        const ReceiverState& staReceiver
+    ) const
+    {
+        const std::uint64_t u64OriginalByteCount = std::get<
+            FileReceiverPayloadDetails
+        >(staReceiver.ctxContext.varPayloadDetails()).u64OriginalByteCount();
+        std::vector<workload::FileWorkload::Message> vecMessages;
+        vecMessages.reserve(staReceiver.vecPacketRecords.size() - 1U);
+
+        // 固定槽位顺序就是文件分片顺序，缺失位置不能压缩或重排。
+        for (std::size_t nPacketIndex = 1;
+             nPacketIndex < staReceiver.vecPacketRecords.size();
+             ++nPacketIndex)
+        {
+            const PacketRecord& recPacket =
+                staReceiver.vecPacketRecords[nPacketIndex];
+            if (recPacket.statusPacket != PacketStatus::Passed
+                || !recPacket.optPacket.has_value())
+            {
+                throw std::logic_error(
+                    "File recovery encountered a non-authenticated slot"
+                );
+            }
+
+            vecMessages.push_back(
+                UdpAuthenticationInputMapper::pktMapDataPacket(
+                    staReceiver.ctxContext.strSenderId(),
+                    recPacket.optPacket.value()
+                ).arrMessage()
+            );
+        }
+
+        crypto::ByteBuffer vecRecovered = workload::FileWorkload::vecRecover(
+            vecMessages,
+            u64OriginalByteCount
+        );
+        const crypto::OpenSslCryptoProvider crpSha256(
+            crypto::CryptoAlgorithm::Sha256
+        );
+        const crypto::Digest digRecoveredSha256 = crpSha256.digHash(
+            vecRecovered
+        );
+        return FileReceiverAuthenticationRuntimeResultDetails(
+            u64OriginalByteCount,
+            std::move(vecRecovered),
+            digRecoveredSha256
+        );
     }
 
     void checkPauseAndTimeoutsLocked(

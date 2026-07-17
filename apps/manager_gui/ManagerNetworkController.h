@@ -4,6 +4,7 @@
 #include "tesla/protocol/NodeDiscoveryMessage.h"
 
 #include <QHash>
+#include <QByteArray>
 #include <QObject>
 #include <QString>
 #include <QVector>
@@ -11,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <string>
 
 class QTimer;
 class QUdpSocket;
@@ -98,6 +100,13 @@ public:
         const QString& strEndpointKey,
         const tesla::protocol::NodeControlMessage& msgMessage
     );
+    /** @brief 在现有MANAGER连接上按64KiB分块并受背压约束地上传完整文件。 */
+    bool bQueueFileUpload(
+        const QString& strEndpointKey,
+        const std::string& strRequestId,
+        std::uint64_t u64ChainId,
+        std::shared_ptr<const QByteArray> ptrFileBytes
+    );
 
     QVector<ManagerNodeSnapshot> vecNodeSnapshots() const;
 
@@ -127,6 +136,7 @@ private:
         const std::shared_ptr<EndpointState>& ptrEndpoint,
         const std::string& strJson
     );
+    bool bPumpFileUpload(const std::shared_ptr<EndpointState>& ptrEndpoint);
     void sendHelloAndStatus(const std::shared_ptr<EndpointState>& ptrEndpoint);
     void sendStatusRequest(const std::shared_ptr<EndpointState>& ptrEndpoint);
     void checkOfflineNodes();

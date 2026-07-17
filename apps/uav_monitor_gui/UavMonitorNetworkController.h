@@ -46,6 +46,7 @@ signals:
     void stateChanged();
     void statusUpdated();
     void logMessage(const QString& strMessage);
+    void fileStatusMessage(const QString& strMessage);
 
 private:
     void processTcpData();

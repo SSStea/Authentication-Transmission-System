@@ -43,6 +43,75 @@ const std::string& TimeSynchronizationStatus::strMessage() const noexcept
     return m_strMessage;
 }
 
+TextAuthenticationRuntimeResultDetails::TextAuthenticationRuntimeResultDetails(
+    std::string strRecoveredText
+)
+    : m_strRecoveredText(std::move(strRecoveredText))
+{
+}
+
+const std::string&
+TextAuthenticationRuntimeResultDetails::strRecoveredText() const noexcept
+{
+    return m_strRecoveredText;
+}
+
+FileSenderAuthenticationRuntimeResultDetails::
+FileSenderAuthenticationRuntimeResultDetails(
+    std::uint64_t u64OriginalByteCount
+)
+    : m_u64OriginalByteCount(u64OriginalByteCount)
+{
+    if (m_u64OriginalByteCount == 0)
+    {
+        throw std::invalid_argument("File Sender result size must be positive");
+    }
+}
+
+std::uint64_t
+FileSenderAuthenticationRuntimeResultDetails::u64OriginalByteCount() const noexcept
+{
+    return m_u64OriginalByteCount;
+}
+
+FileReceiverAuthenticationRuntimeResultDetails::
+FileReceiverAuthenticationRuntimeResultDetails(
+    std::uint64_t u64OriginalByteCount,
+    crypto::ByteBuffer vecRecoveredFileBytes,
+    std::optional<crypto::Digest> optRecoveredSha256
+)
+    : m_u64OriginalByteCount(u64OriginalByteCount),
+      m_vecRecoveredFileBytes(std::move(vecRecoveredFileBytes)),
+      m_optRecoveredSha256(std::move(optRecoveredSha256))
+{
+    if (m_u64OriginalByteCount == 0
+        || (m_vecRecoveredFileBytes.empty() && m_optRecoveredSha256.has_value())
+        || (!m_vecRecoveredFileBytes.empty() && !m_optRecoveredSha256.has_value())
+        || (!m_vecRecoveredFileBytes.empty()
+            && m_vecRecoveredFileBytes.size() != m_u64OriginalByteCount))
+    {
+        throw std::invalid_argument("File Receiver result details are inconsistent");
+    }
+}
+
+std::uint64_t
+FileReceiverAuthenticationRuntimeResultDetails::u64OriginalByteCount() const noexcept
+{
+    return m_u64OriginalByteCount;
+}
+
+const crypto::ByteBuffer&
+FileReceiverAuthenticationRuntimeResultDetails::vecRecoveredFileBytes() const noexcept
+{
+    return m_vecRecoveredFileBytes;
+}
+
+const std::optional<crypto::Digest>&
+FileReceiverAuthenticationRuntimeResultDetails::optRecoveredSha256() const noexcept
+{
+    return m_optRecoveredSha256;
+}
+
 AuthenticationRuntimeResult::AuthenticationRuntimeResult(
     std::string strRoundId,
     std::string strSenderId,
@@ -53,7 +122,7 @@ AuthenticationRuntimeResult::AuthenticationRuntimeResult(
     std::uint32_t u32AuthenticatedPacketCount,
     std::uint32_t u32FailedPacketCount,
     std::uint32_t u32MissingPacketCount,
-    std::string strRecoveredText,
+    AuthenticationRuntimeResultDetails varResultDetails,
     std::string strMessage
 )
     : m_strRoundId(std::move(strRoundId)),
@@ -65,7 +134,7 @@ AuthenticationRuntimeResult::AuthenticationRuntimeResult(
       m_u32AuthenticatedPacketCount(u32AuthenticatedPacketCount),
       m_u32FailedPacketCount(u32FailedPacketCount),
       m_u32MissingPacketCount(u32MissingPacketCount),
-      m_strRecoveredText(std::move(strRecoveredText)),
+      m_varResultDetails(std::move(varResultDetails)),
       m_strMessage(std::move(strMessage))
 {
     if (m_strRoundId.empty() || m_strSenderId.empty() || m_u64ChainId == 0)
@@ -139,9 +208,10 @@ AuthenticationRuntimeResult::u32MissingPacketCount() const noexcept
     return m_u32MissingPacketCount;
 }
 
-const std::string& AuthenticationRuntimeResult::strRecoveredText() const noexcept
+const AuthenticationRuntimeResultDetails&
+AuthenticationRuntimeResult::varResultDetails() const noexcept
 {
-    return m_strRecoveredText;
+    return m_varResultDetails;
 }
 
 const std::string& AuthenticationRuntimeResult::strMessage() const noexcept

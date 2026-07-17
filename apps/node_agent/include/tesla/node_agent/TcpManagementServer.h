@@ -2,6 +2,7 @@
 
 #include "tesla/protocol/NodeControlMessage.h"
 #include "tesla/protocol/TcpFrame.h"
+#include "tesla/workload/FileWorkload.h"
 
 #include <atomic>
 #include <cstdint>
@@ -24,13 +25,20 @@ public:
         protocol::TcpClientRole,
         const protocol::NodeControlMessage&
     )>;
+    using FilePayloadHandler = std::function<protocol::NodeControlMessage(
+        protocol::TcpClientRole,
+        const std::string&,
+        std::uint64_t,
+        workload::FileWorkload
+    )>;
 
     TcpManagementServer(
         std::string strBindAddress,
         std::uint16_t u16Port,
         std::string strNodeName,
         RuntimeStateProvider fnStateProvider,
-        ControlMessageHandler fnControlMessageHandler
+        ControlMessageHandler fnControlMessageHandler,
+        FilePayloadHandler fnFilePayloadHandler
     );
     ~TcpManagementServer();
 
@@ -66,6 +74,7 @@ private:
     std::string                      m_strNodeName;
     RuntimeStateProvider             m_fnStateProvider;
     ControlMessageHandler            m_fnControlMessageHandler;
+    FilePayloadHandler               m_fnFilePayloadHandler;
     std::atomic<bool>                m_bRunning{false};
     std::atomic<int>                 m_nListenSocket{-1};
     std::thread                      m_thrAccept;

@@ -32,6 +32,10 @@ const char* pTypeName(NodeControlMessageType typeMessage)
         return "RECEIVER_AUTH_CONTEXTS";
     case NodeControlMessageType::TextPayloadConfig:
         return "TEXT_PAYLOAD";
+    case NodeControlMessageType::FileUploadBegin:
+        return "FILE_UPLOAD_BEGIN";
+    case NodeControlMessageType::FileUploadEnd:
+        return "FILE_UPLOAD_END";
     case NodeControlMessageType::AuthenticationConfigAcknowledgement:
         return "AUTH_CONFIG_ACK";
     case NodeControlMessageType::RoundStart:
@@ -140,6 +144,8 @@ const char* pConfigTargetName(AuthenticationConfigTarget targetConfig)
         return "RECEIVER";
     case AuthenticationConfigTarget::TextPayload:
         return "TEXT_PAYLOAD";
+    case AuthenticationConfigTarget::FilePayload:
+        return "FILE_PAYLOAD";
     }
 
     throw std::invalid_argument("Unknown authentication configuration target");
@@ -160,6 +166,11 @@ AuthenticationConfigTarget targetConfigParse(const std::string& strTarget)
     if (strTarget == "TEXT_PAYLOAD")
     {
         return AuthenticationConfigTarget::TextPayload;
+    }
+
+    if (strTarget == "FILE_PAYLOAD")
+    {
+        return AuthenticationConfigTarget::FilePayload;
     }
 
     throw std::invalid_argument("Unknown authentication configuration target");
@@ -337,6 +348,152 @@ AuthenticationRoundResultStatus statusResultParse(const std::string& strStatus)
     throw std::invalid_argument("Unknown authentication round result status");
 }
 
+nlohmann::json jsnEncodeReceiverPayload(
+    const ReceiverPayloadControlDetails& varPayloadDetails
+)
+{
+    if (std::holds_alternative<TextReceiverPayloadControlDetails>(
+            varPayloadDetails
+        ))
+    {
+        return {
+            {"type", "TEXT"},
+            {
+                "repeatCount",
+                std::get<TextReceiverPayloadControlDetails>(varPayloadDetails)
+                    .u32RepeatCount()
+            }
+        };
+    }
+
+    return {
+        {"type", "FILE"},
+        {
+            "originalByteCount",
+            std::get<FileReceiverPayloadControlDetails>(varPayloadDetails)
+                .u64OriginalByteCount()
+        }
+    };
+}
+
+ReceiverPayloadControlDetails varDecodeReceiverPayload(
+    const nlohmann::json& jsnPayload
+)
+{
+    const std::string strType = jsnPayload.at("type").get<std::string>();
+    if (strType == "TEXT")
+    {
+        return TextReceiverPayloadControlDetails(
+            jsnPayload.at("repeatCount").get<std::uint32_t>()
+        );
+    }
+
+    if (strType == "FILE")
+    {
+        if (jsnPayload.contains("originalSha256"))
+        {
+            throw std::invalid_argument(
+                "Receiver file payload must not contain the original SHA-256"
+            );
+        }
+
+        return FileReceiverPayloadControlDetails(
+            jsnPayload.at("originalByteCount").get<std::uint64_t>()
+        );
+    }
+
+    throw std::invalid_argument("Unknown Receiver payload detail type");
+}
+
+nlohmann::json jsnEncodeResultDetails(
+    const AuthenticationRoundResultDetails& varResultDetails
+)
+{
+    if (std::holds_alternative<TextAuthenticationRoundResultDetails>(
+            varResultDetails
+        ))
+    {
+        return {
+            {"type", "TEXT"},
+            {
+                "recoveredText",
+                std::get<TextAuthenticationRoundResultDetails>(varResultDetails)
+                    .strRecoveredText()
+            }
+        };
+    }
+
+    if (std::holds_alternative<FileSenderAuthenticationRoundResultDetails>(
+            varResultDetails
+        ))
+    {
+        return {
+            {"type", "FILE_SENDER"},
+            {
+                "originalByteCount",
+                std::get<FileSenderAuthenticationRoundResultDetails>(
+                    varResultDetails
+                ).u64OriginalByteCount()
+            }
+        };
+    }
+
+    const FileReceiverAuthenticationRoundResultDetails& detFile = std::get<
+        FileReceiverAuthenticationRoundResultDetails
+    >(varResultDetails);
+    nlohmann::json jsnResult{
+        {"type", "FILE_RECEIVER"},
+        {"originalByteCount", detFile.u64OriginalByteCount()},
+        {"recoveredByteCount", detFile.u64RecoveredByteCount()}
+    };
+    if (detFile.optRecoveredSha256().has_value())
+    {
+        jsnResult["recoveredSha256"] =
+            AuthenticationControlValueCodec::strEncodeBlock(
+                detFile.optRecoveredSha256().value()
+            );
+    }
+    return jsnResult;
+}
+
+AuthenticationRoundResultDetails varDecodeResultDetails(
+    const nlohmann::json& jsnDetails
+)
+{
+    const std::string strType = jsnDetails.at("type").get<std::string>();
+    if (strType == "TEXT")
+    {
+        return TextAuthenticationRoundResultDetails(
+            jsnDetails.value("recoveredText", std::string())
+        );
+    }
+
+    if (strType == "FILE_SENDER")
+    {
+        return FileSenderAuthenticationRoundResultDetails(
+            jsnDetails.at("originalByteCount").get<std::uint64_t>()
+        );
+    }
+
+    if (strType == "FILE_RECEIVER")
+    {
+        std::optional<BinaryBlock> optRecoveredSha256;
+        if (jsnDetails.contains("recoveredSha256"))
+        {
+            optRecoveredSha256 = AuthenticationControlValueCodec::arrDecodeBlock(
+                jsnDetails.at("recoveredSha256").get<std::string>()
+            );
+        }
+        return FileReceiverAuthenticationRoundResultDetails(
+            jsnDetails.at("originalByteCount").get<std::uint64_t>(),
+            jsnDetails.at("recoveredByteCount").get<std::uint64_t>(),
+            std::move(optRecoveredSha256)
+        );
+    }
+
+    throw std::invalid_argument("Unknown authentication result detail type");
+}
+
 nlohmann::json jsnEncodeRoundParameters(
     const AuthenticationRoundControlParameters& prmParameters
 )
@@ -491,7 +648,10 @@ std::string NodeControlJsonCodec::strEncode(const NodeControlMessage& msgMessage
                         detContext.arrCommitmentKey()
                     )
                 },
-                {"round", jsnEncodeRoundParameters(detContext.prmRoundParameters())}
+                {"round", jsnEncodeRoundParameters(detContext.prmRoundParameters())},
+                {"payloadDetails", jsnEncodeReceiverPayload(
+                    detContext.varPayloadDetails()
+                )}
             });
         }
     }
@@ -504,6 +664,28 @@ std::string NodeControlJsonCodec::strEncode(const NodeControlMessage& msgMessage
             detPayload.u64ChainId()
         );
         jsnMessage["text"] = detPayload.strUtf8Text();
+    }
+    else if (msgMessage.typeMessage() == NodeControlMessageType::FileUploadBegin)
+    {
+        const FileUploadBeginControlDetails& detUpload =
+            std::get<FileUploadBeginControlDetails>(msgMessage.varDetails());
+        jsnMessage["requestId"] = detUpload.strRequestId();
+        jsnMessage["chainId"] = AuthenticationControlValueCodec::strEncodeChainId(
+            detUpload.u64ChainId()
+        );
+        jsnMessage["originalByteCount"] = detUpload.u64OriginalByteCount();
+    }
+    else if (msgMessage.typeMessage() == NodeControlMessageType::FileUploadEnd)
+    {
+        const FileUploadEndControlDetails& detUpload =
+            std::get<FileUploadEndControlDetails>(msgMessage.varDetails());
+        jsnMessage["requestId"] = detUpload.strRequestId();
+        jsnMessage["chainId"] = AuthenticationControlValueCodec::strEncodeChainId(
+            detUpload.u64ChainId()
+        );
+        jsnMessage["chunkCount"] = detUpload.u32ChunkCount();
+        jsnMessage["transferredByteCount"] =
+            detUpload.u64TransferredByteCount();
     }
     else if (msgMessage.typeMessage()
         == NodeControlMessageType::AuthenticationConfigAcknowledgement)
@@ -571,7 +753,9 @@ std::string NodeControlJsonCodec::strEncode(const NodeControlMessage& msgMessage
             detResult.u32AuthenticatedPacketCount();
         jsnMessage["failedPacketCount"] = detResult.u32FailedPacketCount();
         jsnMessage["missingPacketCount"] = detResult.u32MissingPacketCount();
-        jsnMessage["recoveredText"] = detResult.strRecoveredText();
+        jsnMessage["payloadDetails"] = jsnEncodeResultDetails(
+            detResult.varResultDetails()
+        );
         jsnMessage["message"] = detResult.strMessage();
     }
     else
@@ -683,7 +867,8 @@ NodeControlDecodeResult NodeControlJsonCodec::resDecode(const std::string& strJs
                     AuthenticationControlValueCodec::arrDecodeBlock(
                         jsnContext.at("commitmentKey").get<std::string>()
                     ),
-                    prmDecodeRoundParameters(jsnContext.at("round"))
+                    prmDecodeRoundParameters(jsnContext.at("round")),
+                    varDecodeReceiverPayload(jsnContext.at("payloadDetails"))
                 );
             }
 
@@ -701,6 +886,29 @@ NodeControlDecodeResult NodeControlJsonCodec::resDecode(const std::string& strJs
                     jsnMessage.at("chainId").get<std::string>()
                 ),
                 jsnMessage.at("text").get<std::string>()
+            ));
+        }
+
+        if (strType == "FILE_UPLOAD_BEGIN")
+        {
+            return NodeControlMessage(FileUploadBeginControlDetails(
+                jsnMessage.at("requestId").get<std::string>(),
+                AuthenticationControlValueCodec::u64DecodeChainId(
+                    jsnMessage.at("chainId").get<std::string>()
+                ),
+                jsnMessage.at("originalByteCount").get<std::uint64_t>()
+            ));
+        }
+
+        if (strType == "FILE_UPLOAD_END")
+        {
+            return NodeControlMessage(FileUploadEndControlDetails(
+                jsnMessage.at("requestId").get<std::string>(),
+                AuthenticationControlValueCodec::u64DecodeChainId(
+                    jsnMessage.at("chainId").get<std::string>()
+                ),
+                jsnMessage.at("chunkCount").get<std::uint32_t>(),
+                jsnMessage.at("transferredByteCount").get<std::uint64_t>()
             ));
         }
 
@@ -765,7 +973,7 @@ NodeControlDecodeResult NodeControlJsonCodec::resDecode(const std::string& strJs
                 jsnMessage.at("authenticatedPacketCount").get<std::uint32_t>(),
                 jsnMessage.at("failedPacketCount").get<std::uint32_t>(),
                 jsnMessage.at("missingPacketCount").get<std::uint32_t>(),
-                jsnMessage.value("recoveredText", std::string()),
+                varDecodeResultDetails(jsnMessage.at("payloadDetails")),
                 jsnMessage.at("message").get<std::string>()
             ));
         }

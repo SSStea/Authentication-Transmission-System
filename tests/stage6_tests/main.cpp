@@ -230,6 +230,10 @@ bool bConfigureReceiver(
                                 arrBlock(matMaterial.digCommitmentKey()),
                                 prmControl(
                                     matMaterial.prmRoundParameters()
+                                ),
+                                protocol::TextReceiverPayloadControlDetails(
+                                    matMaterial.prmRoundParameters()
+                                        .u32TotalPacketCount()
                                 )
                             )
                     }
@@ -494,6 +498,9 @@ bool bRunEndToEnd(
     const auto vecReceiverResults = colReceiverResults.vecResults();
     const auto& detSender = vecSenderResults.front();
     const auto& detReceiver = vecReceiverResults.front();
+    const auto& detRecoveredText = std::get<
+        protocol::TextAuthenticationRoundResultDetails
+    >(detReceiver.varResultDetails());
     const bool bPassed = detSender.statusResult()
             == protocol::AuthenticationRoundResultStatus::Completed
         && detReceiver.statusResult()
@@ -501,7 +508,7 @@ bool bRunEndToEnd(
         && detReceiver.u32AuthenticatedPacketCount() == u32PacketCount
         && detReceiver.u32FailedPacketCount() == 0
         && detReceiver.u32MissingPacketCount() == 0
-        && detReceiver.strRecoveredText() == "helloworld";
+        && detRecoveredText.strRecoveredText() == "helloworld";
     if (!bPassed)
     {
         std::cerr
@@ -513,7 +520,7 @@ bool bRunEndToEnd(
             << detReceiver.u32AuthenticatedPacketCount()
             << ", failed=" << detReceiver.u32FailedPacketCount()
             << ", missing=" << detReceiver.u32MissingPacketCount()
-            << ", text=" << detReceiver.strRecoveredText()
+            << ", text=" << detRecoveredText.strRecoveredText()
             << ", message=" << detReceiver.strMessage()
             << ", sent=" << u32SentDatagrams.load()
             << ", enqueued=" << u32AcceptedDatagrams.load()

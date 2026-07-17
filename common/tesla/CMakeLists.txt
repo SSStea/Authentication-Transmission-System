@@ -7,6 +7,7 @@ set(TESLA_CORE_HEADERS
     include/tesla/core/AuthenticationRoundParameters.h
     include/tesla/core/AuthenticationRuntimeTypes.h
     include/tesla/core/AuthenticationSenderRuntime.h
+    include/tesla/core/FileUploadSession.h
     include/tesla/core/ImprovedTeslaDetails.h
     include/tesla/core/ImprovedTeslaStrategy.h
     include/tesla/core/KsRsMatrix.h
@@ -29,6 +30,7 @@ set(TESLA_CORE_SOURCES
     src/AuthenticationRoundParameters.cpp
     src/AuthenticationRuntimeTypes.cpp
     src/AuthenticationSenderRuntime.cpp
+    src/FileUploadSession.cpp
     src/ImprovedTeslaDetails.cpp
     src/ImprovedTeslaStrategy.cpp
     src/KsRsMatrix.cpp

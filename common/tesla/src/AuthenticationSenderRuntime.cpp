@@ -30,7 +30,7 @@ namespace
 using SteadyClock = std::chrono::steady_clock;
 using SystemClock = std::chrono::system_clock;
 
-constexpr std::uint32_t MAX_STAGE6_PACKET_COUNT = 200000;
+constexpr std::uint32_t MAX_AUTHENTICATION_PACKET_COUNT = 200000;
 constexpr std::chrono::microseconds DEFAULT_SEND_BUDGET(250);
 
 protocol::BinaryBlock arrMapDigest(const crypto::Digest& digValue)
@@ -38,13 +38,6 @@ protocol::BinaryBlock arrMapDigest(const crypto::Digest& digValue)
     protocol::BinaryBlock arrResult{};
     std::copy(digValue.begin(), digValue.end(), arrResult.begin());
     return arrResult;
-}
-
-protocol::UdpAuthenticationMode modeMap(TeslaAuthenticationMode modeAuthentication)
-{
-    return modeAuthentication == TeslaAuthenticationMode::Native
-        ? protocol::UdpAuthenticationMode::Native
-        : protocol::UdpAuthenticationMode::Improved;
 }
 
 protocol::UdpAuthenticationPacketContext ctxCreatePacketContext(
@@ -80,6 +73,33 @@ AuthenticationPacketInput::Message arrMapMessage(
     AuthenticationPacketInput::Message arrResult{};
     std::copy(arrMessage.begin(), arrMessage.end(), arrResult.begin());
     return arrResult;
+}
+
+AuthenticationPacketInput::Message arrWorkloadMessage(
+    const SenderPayloadWorkload& varWorkload,
+    std::uint32_t u32PacketIndex
+)
+{
+    return std::visit(
+        [u32PacketIndex](const auto& wrkPayload)
+        {
+            return arrMapMessage(wrkPayload.arrMessage(u32PacketIndex));
+        },
+        varWorkload
+    );
+}
+
+std::uint32_t u32WorkloadPacketCount(
+    const SenderPayloadWorkload& varWorkload
+)
+{
+    return std::visit(
+        [](const auto& wrkPayload)
+        {
+            return wrkPayload.u32PacketCount();
+        },
+        varWorkload
+    );
 }
 
 std::uint64_t u64NowMilliseconds()
@@ -123,35 +143,45 @@ public:
 
     void configure(
         SenderAuthenticationContext ctxSender,
-        workload::TextWorkload wrkText
+        SenderPayloadWorkload varWorkload
     )
     {
         stop(false);
 
         const AuthenticationRoundParameters& prmRound =
             ctxSender.matMaterial().prmRoundParameters();
-        if (prmRound.modePayload() != AuthenticationPayloadMode::Text)
-        {
-            throw std::invalid_argument("Stage6 sender runtime only accepts text payloads");
-        }
-
-        if (wrkText.u32PacketCount() != prmRound.u32TotalPacketCount())
+        const bool bTextWorkload = std::holds_alternative<
+            workload::TextWorkload
+        >(varWorkload);
+        if ((prmRound.modePayload() == AuthenticationPayloadMode::Text)
+            != bTextWorkload)
         {
             throw std::invalid_argument(
-                "Text workload packet count does not match sender configuration"
+                "Sender workload type does not match the configured payload mode"
             );
         }
 
-        if (wrkText.u32PacketCount() > MAX_STAGE6_PACKET_COUNT)
+        if (u32WorkloadPacketCount(varWorkload)
+            != prmRound.u32TotalPacketCount())
         {
-            throw std::invalid_argument("Stage6 text packet count exceeds the bounded runtime");
+            throw std::invalid_argument(
+                "Workload packet count does not match sender configuration"
+            );
+        }
+
+        if (u32WorkloadPacketCount(varWorkload)
+            > MAX_AUTHENTICATION_PACKET_COUNT)
+        {
+            throw std::invalid_argument(
+                "Authentication packet count exceeds the bounded runtime"
+            );
         }
 
         std::vector<IntervalDatagrams> vecIntervals;
         std::chrono::nanoseconds durWorstGeneration(0);
         buildDatagrams(
             ctxSender,
-            wrkText,
+            varWorkload,
             vecIntervals,
             durWorstGeneration
         );
@@ -159,10 +189,24 @@ public:
 
         std::lock_guard<std::mutex> lckState(m_mtxState);
         m_optSenderContext = std::move(ctxSender);
-        m_optTextWorkload = std::move(wrkText);
+        m_optPayloadWorkload = std::move(varWorkload);
         m_vecIntervals = std::move(vecIntervals);
         m_durWorstGeneration = durWorstGeneration;
         m_bConfigured = true;
+        m_bRunning = false;
+        m_bPaused = false;
+    }
+
+    void resetConfiguration() noexcept
+    {
+        stop(false);
+
+        std::lock_guard<std::mutex> lckState(m_mtxState);
+        m_optSenderContext.reset();
+        m_optPayloadWorkload.reset();
+        m_vecIntervals.clear();
+        m_strRoundId.clear();
+        m_bConfigured = false;
         m_bRunning = false;
         m_bPaused = false;
     }
@@ -178,7 +222,7 @@ public:
             std::lock_guard<std::mutex> lckState(m_mtxState);
             if (!m_bConfigured
                 || !m_optSenderContext.has_value()
-                || !m_optTextWorkload.has_value())
+                || !m_optPayloadWorkload.has_value())
             {
                 throw std::logic_error("Sender runtime is not fully configured");
             }
@@ -308,7 +352,7 @@ public:
 private:
     void buildDatagrams(
         const SenderAuthenticationContext& ctxSender,
-        const workload::TextWorkload& wrkText,
+        const SenderPayloadWorkload& varWorkload,
         std::vector<IntervalDatagrams>& vecIntervals,
         std::chrono::nanoseconds& durWorstGeneration
     ) const
@@ -335,7 +379,7 @@ private:
             const SteadyClock::time_point tpGenerationStart = SteadyClock::now();
             buildDataInterval(
                 ctxSender,
-                wrkText,
+                varWorkload,
                 crpProvider,
                 ctxPacket,
                 u32IntervalIndex,
@@ -378,7 +422,7 @@ private:
 
     void buildDataInterval(
         const SenderAuthenticationContext& ctxSender,
-        const workload::TextWorkload& wrkText,
+        const SenderPayloadWorkload& varWorkload,
         const crypto::CryptoProvider& crpProvider,
         const protocol::UdpAuthenticationPacketContext& ctxPacket,
         std::uint32_t u32IntervalIndex,
@@ -401,7 +445,7 @@ private:
         {
             buildNativeInterval(
                 ctxSender,
-                wrkText,
+                varWorkload,
                 crpProvider,
                 ctxPacket,
                 u32IntervalIndex,
@@ -414,7 +458,7 @@ private:
 
         buildImprovedInterval(
             ctxSender,
-            wrkText,
+            varWorkload,
             crpProvider,
             ctxPacket,
             u32IntervalIndex,
@@ -426,7 +470,7 @@ private:
 
     AuthenticationGroupInput grpCreate(
         const SenderAuthenticationContext& ctxSender,
-        const workload::TextWorkload& wrkText,
+        const SenderPayloadWorkload& varWorkload,
         std::uint32_t u32IntervalIndex,
         std::uint32_t u32GroupIndex,
         std::uint32_t u32FirstPacketIndex,
@@ -445,7 +489,7 @@ private:
                 ctxSender.matMaterial().u64ChainId(),
                 u32IntervalIndex,
                 u32PacketIndex,
-                arrMapMessage(wrkText.arrMessage(u32PacketIndex))
+                arrWorkloadMessage(varWorkload, u32PacketIndex)
             ));
         }
 
@@ -481,7 +525,7 @@ private:
 
     void buildNativeInterval(
         const SenderAuthenticationContext& ctxSender,
-        const workload::TextWorkload& wrkText,
+        const SenderPayloadWorkload& varWorkload,
         const crypto::CryptoProvider& crpProvider,
         const protocol::UdpAuthenticationPacketContext& ctxPacket,
         std::uint32_t u32IntervalIndex,
@@ -492,7 +536,7 @@ private:
     {
         const AuthenticationGroupInput grpInterval = grpCreate(
             ctxSender,
-            wrkText,
+            varWorkload,
             u32IntervalIndex,
             u32IntervalIndex,
             u32FirstPacketIndex,
@@ -520,7 +564,7 @@ private:
                         ctxSender.matMaterial().u64ChainId(),
                         u32IntervalIndex,
                         u32PacketIndex,
-                        wrkText.arrMessage(u32PacketIndex),
+                        arrWorkloadMessage(varWorkload, u32PacketIndex),
                         optDisclosureForPacket(
                             ctxSender,
                             u32IntervalIndex,
@@ -539,7 +583,7 @@ private:
 
     void buildImprovedInterval(
         const SenderAuthenticationContext& ctxSender,
-        const workload::TextWorkload& wrkText,
+        const SenderPayloadWorkload& varWorkload,
         const crypto::CryptoProvider& crpProvider,
         const protocol::UdpAuthenticationPacketContext& ctxPacket,
         std::uint32_t u32IntervalIndex,
@@ -568,7 +612,7 @@ private:
                 ((u32GroupFirstPacket - 1U) / prmImproved.u32GroupSize()) + 1U;
             const AuthenticationGroupInput grpInput = grpCreate(
                 ctxSender,
-                wrkText,
+                varWorkload,
                 u32IntervalIndex,
                 u32GroupIndex,
                 u32GroupFirstPacket,
@@ -612,7 +656,7 @@ private:
                             ctxSender.matMaterial().u64ChainId(),
                             u32IntervalIndex,
                             u32PacketIndex,
-                            wrkText.arrMessage(u32PacketIndex),
+                            arrWorkloadMessage(varWorkload, u32PacketIndex),
                             optDisclosureForPacket(
                                 ctxSender,
                                 u32IntervalIndex,
@@ -887,6 +931,8 @@ private:
             std::uint64_t u64ChainId = 0;
             std::uint32_t u32ExpectedPacketCount = 0;
             std::uint32_t u32SentPacketCount = 0;
+            AuthenticationRuntimeResultDetails varResultDetails =
+                TextAuthenticationRuntimeResultDetails("");
 
             {
                 std::lock_guard<std::mutex> lckState(m_mtxState);
@@ -904,6 +950,19 @@ private:
                     m_u32SentDataPacketCount,
                     u32ExpectedPacketCount
                 );
+
+                if (m_optPayloadWorkload.has_value()
+                    && std::holds_alternative<workload::FileWorkload>(
+                        m_optPayloadWorkload.value()
+                    ))
+                {
+                    varResultDetails =
+                        FileSenderAuthenticationRuntimeResultDetails(
+                            std::get<workload::FileWorkload>(
+                                m_optPayloadWorkload.value()
+                            ).u64OriginalByteCount()
+                        );
+                }
             }
 
             m_fnResultHandler(AuthenticationRuntimeResult(
@@ -918,7 +977,7 @@ private:
                     : 0,
                 0,
                 u32ExpectedPacketCount - u32SentPacketCount,
-                "",
+                std::move(varResultDetails),
                 strMessage
             ));
         }
@@ -935,7 +994,7 @@ private:
     std::condition_variable         m_cndState;
     std::thread                     m_thrWorker;
     std::optional<SenderAuthenticationContext> m_optSenderContext;
-    std::optional<workload::TextWorkload>      m_optTextWorkload;
+    std::optional<SenderPayloadWorkload>        m_optPayloadWorkload;
     std::vector<IntervalDatagrams>  m_vecIntervals;
     std::string                     m_strRoundId;
     std::uint64_t                   m_u64StartTimestampMilliseconds = 0;
@@ -968,10 +1027,15 @@ AuthenticationSenderRuntime::~AuthenticationSenderRuntime() = default;
 
 void AuthenticationSenderRuntime::configure(
     SenderAuthenticationContext ctxSender,
-    workload::TextWorkload wrkText
+    SenderPayloadWorkload varWorkload
 )
 {
-    m_ptrImpl->configure(std::move(ctxSender), std::move(wrkText));
+    m_ptrImpl->configure(std::move(ctxSender), std::move(varWorkload));
+}
+
+void AuthenticationSenderRuntime::resetConfiguration() noexcept
+{
+    m_ptrImpl->resetConfiguration();
 }
 
 void AuthenticationSenderRuntime::start(

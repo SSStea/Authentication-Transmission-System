@@ -273,10 +273,64 @@ void UavMonitorNetworkController::processTcpData()
                 std::get<AuthenticationRoundResultControlDetails>(
                     msgMessage.varDetails()
                 );
+
+            QString strPayloadSummary;
+            if (std::holds_alternative<TextAuthenticationRoundResultDetails>(
+                    detResult.varResultDetails()
+                ))
+            {
+                const auto& detText = std::get<
+                    TextAuthenticationRoundResultDetails
+                >(detResult.varResultDetails());
+                strPayloadSummary = QStringLiteral("恢复文本“%1”")
+                    .arg(QString::fromStdString(detText.strRecoveredText()));
+            }
+            else if (std::holds_alternative<
+                    FileReceiverAuthenticationRoundResultDetails
+                >(detResult.varResultDetails()))
+            {
+                const auto& detFile = std::get<
+                    FileReceiverAuthenticationRoundResultDetails
+                >(detResult.varResultDetails());
+                strPayloadSummary = QStringLiteral("恢复文件 %1/%2 字节")
+                    .arg(detFile.u64RecoveredByteCount())
+                    .arg(detFile.u64OriginalByteCount());
+                const QString strRecoveredHash =
+                    detFile.optRecoveredSha256().has_value()
+                    ? QString::fromStdString(
+                        AuthenticationControlValueCodec::strEncodeBlock(
+                            detFile.optRecoveredSha256().value()
+                        )
+                    )
+                    : QStringLiteral("无");
+                emit fileStatusMessage(QStringLiteral(
+                    "Receiver %1 / chainId=%2：%3，SHA-256=%4；%5"
+                )
+                    .arg(QString::fromStdString(detResult.strSenderId()))
+                    .arg(detResult.u64ChainId())
+                    .arg(strPayloadSummary, strRecoveredHash)
+                    .arg(QString::fromStdString(detResult.strMessage())));
+            }
+            else
+            {
+                const auto& detFile = std::get<
+                    FileSenderAuthenticationRoundResultDetails
+                >(detResult.varResultDetails());
+                strPayloadSummary = QStringLiteral("发送文件 %1 字节")
+                    .arg(detFile.u64OriginalByteCount());
+                emit fileStatusMessage(QStringLiteral(
+                    "Sender %1 / chainId=%2：%3；%4"
+                )
+                    .arg(QString::fromStdString(detResult.strSenderId()))
+                    .arg(detResult.u64ChainId())
+                    .arg(strPayloadSummary)
+                    .arg(QString::fromStdString(detResult.strMessage())));
+            }
+
             emit logMessage(
                 QStringLiteral(
                     "认证结果 %1 / chainId=%2：通过 %3/%4，失败 %5，"
-                    "缺失 %6，恢复文本“%7”；%8"
+                    "缺失 %6，%7；%8"
                 )
                     .arg(QString::fromStdString(detResult.strSenderId()))
                     .arg(detResult.u64ChainId())
@@ -284,7 +338,7 @@ void UavMonitorNetworkController::processTcpData()
                     .arg(detResult.u32ExpectedPacketCount())
                     .arg(detResult.u32FailedPacketCount())
                     .arg(detResult.u32MissingPacketCount())
-                    .arg(QString::fromStdString(detResult.strRecoveredText()))
+                    .arg(strPayloadSummary)
                     .arg(QString::fromStdString(detResult.strMessage()))
             );
         }

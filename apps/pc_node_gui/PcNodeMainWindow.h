@@ -27,9 +27,11 @@ private:
         const QString& strTitle,
         const QString& strDescription
     );
+    QWidget* pCreateFileStatusPage();
     QWidget* pCreateLogPage();
     void refreshStatus();
     void appendLog(const QString& strMessage);
+    void appendFileStatus(const QString& strMessage);
     void applyStyle();
 
     PcNodeNetworkController m_ctlNetwork;
@@ -38,5 +40,6 @@ private:
     QLabel*                 m_pUdpValue;
     QLabel*                 m_pSenderValue;
     QLabel*                 m_pReceiverValue;
+    QTextEdit*              m_pFileStatusEdit;
     QTextEdit*              m_pLogEdit;
 };

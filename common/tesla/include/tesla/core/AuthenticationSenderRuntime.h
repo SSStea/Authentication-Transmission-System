@@ -3,15 +3,22 @@
 #include "tesla/core/AuthenticationRuntimeTypes.h"
 #include "tesla/core/SenderAuthenticationContext.h"
 #include "tesla/protocol/ProtocolTypes.h"
+#include "tesla/workload/FileWorkload.h"
 #include "tesla/workload/TextWorkload.h"
 
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
+#include <variant>
 
 namespace tesla::core
 {
+using SenderPayloadWorkload = std::variant<
+    workload::TextWorkload,
+    workload::FileWorkload
+>;
+
 /**
  * @brief 负责一轮TESLA数据报文生成、绝对时间调度和披露尾包发送。
  *
@@ -35,8 +42,10 @@ public:
 
     void configure(
         SenderAuthenticationContext ctxSender,
-        workload::TextWorkload wrkText
+        SenderPayloadWorkload varWorkload
     );
+    /** @brief 清除上一轮已经预生成的报文，防止新CA配置误用旧载荷。 */
+    void resetConfiguration() noexcept;
     void start(
         std::string strRoundId,
         std::uint64_t u64StartTimestampMilliseconds

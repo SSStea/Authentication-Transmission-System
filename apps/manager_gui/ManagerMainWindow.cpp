@@ -1,10 +1,15 @@
 #include "ManagerMainWindow.h"
 
 #include "tesla/core/AuthenticationRoundParameters.h"
+#include "tesla/workload/FileWorkload.h"
 
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCryptographicHash>
+#include <QFile>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHeaderView>
@@ -84,6 +89,7 @@ ManagerMainWindow::ManagerMainWindow(
       m_pStatusLabel(new QLabel(QStringLiteral("就绪"), this)),
       m_pModeCombo(nullptr),
       m_pAlgorithmCombo(nullptr),
+      m_pPayloadCombo(nullptr),
       m_pIntervalSpin(nullptr),
       m_pPacketsSpin(nullptr),
       m_pRepeatSpin(nullptr),
@@ -91,6 +97,9 @@ ManagerMainWindow::ManagerMainWindow(
       m_pGroupSpin(nullptr),
       m_pThresholdSpin(nullptr),
       m_pTextEdit(nullptr),
+      m_pSelectFileButton(nullptr),
+      m_pFileInfoLabel(nullptr),
+      m_pFileComparisonTable(nullptr),
       m_pValidationLabel(nullptr),
       m_pCommunicationValue(nullptr),
       m_pPrepareButton(nullptr),
@@ -167,6 +176,61 @@ ManagerMainWindow::ManagerMainWindow(
         [this](const QString& strMessage)
         {
             m_pStatusLabel->setText(strMessage);
+        }
+    );
+    connect(
+        &m_ctlAuthentication,
+        &ManagerAuthenticationController::fileComparisonResult,
+        this,
+        [this](
+            const QString& strSenderId,
+            quint64 u64ChainId,
+            quint64 u64OriginalByteCount,
+            quint64 u64RecoveredByteCount,
+            const QString& strOriginalSha256,
+            const QString& strRecoveredSha256,
+            bool bMatches
+        )
+        {
+            const int nRow = m_pFileComparisonTable->rowCount();
+            m_pFileComparisonTable->insertRow(nRow);
+            m_pFileComparisonTable->setItem(
+                nRow,
+                0,
+                pReadOnlyItem(strSenderId)
+            );
+            m_pFileComparisonTable->setItem(
+                nRow,
+                1,
+                pReadOnlyItem(QString::number(u64ChainId))
+            );
+            m_pFileComparisonTable->setItem(
+                nRow,
+                2,
+                pReadOnlyItem(QString::number(u64OriginalByteCount))
+            );
+            m_pFileComparisonTable->setItem(
+                nRow,
+                3,
+                pReadOnlyItem(QString::number(u64RecoveredByteCount))
+            );
+            m_pFileComparisonTable->setItem(
+                nRow,
+                4,
+                pReadOnlyItem(strOriginalSha256)
+            );
+            m_pFileComparisonTable->setItem(
+                nRow,
+                5,
+                pReadOnlyItem(strRecoveredSha256)
+            );
+            m_pFileComparisonTable->setItem(
+                nRow,
+                6,
+                pReadOnlyItem(
+                    bMatches ? QStringLiteral("一致") : QStringLiteral("失败")
+                )
+            );
         }
     );
 
@@ -286,6 +350,11 @@ QWidget* ManagerMainWindow::pCreateConfigurationPage()
         QStringLiteral("SM3"),
         QStringLiteral("SHA3-256")
     });
+    m_pPayloadCombo = new QComboBox(pParameterGroup);
+    m_pPayloadCombo->addItems({
+        QStringLiteral("文本模式"),
+        QStringLiteral("文件模式")
+    });
     m_pIntervalSpin = new QSpinBox(pParameterGroup);
     m_pIntervalSpin->setRange(1, 60000);
     m_pIntervalSpin->setValue(100);
@@ -306,6 +375,7 @@ QWidget* ManagerMainWindow::pCreateConfigurationPage()
     m_pThresholdSpin->setValue(1);
     pParameterLayout->addRow(QStringLiteral("认证模式"), m_pModeCombo);
     pParameterLayout->addRow(QStringLiteral("密码算法"), m_pAlgorithmCombo);
+    pParameterLayout->addRow(QStringLiteral("载荷模式"), m_pPayloadCombo);
     pParameterLayout->addRow(QStringLiteral("时间间隔(ms)"), m_pIntervalSpin);
     pParameterLayout->addRow(QStringLiteral("每间隔发包数"), m_pPacketsSpin);
     pParameterLayout->addRow(QStringLiteral("文本发送次数"), m_pRepeatSpin);
@@ -322,10 +392,15 @@ QWidget* ManagerMainWindow::pCreateConfigurationPage()
     m_pTextEdit->setPlainText(QStringLiteral("helloworld"));
     m_pTextEdit->setMaximumHeight(100);
     pPayloadLayout->addWidget(m_pTextEdit);
-    pPayloadLayout->addWidget(pDisabledStageButton(
-        QStringLiteral("选择文件"),
-        QStringLiteral("阶段7实现文件上传、分片、恢复与Hash比较")
-    ));
+    m_pSelectFileButton = new QPushButton(QStringLiteral("选择文件"), pPayloadGroup);
+    pPayloadLayout->addWidget(m_pSelectFileButton);
+    m_pFileInfoLabel = new QLabel(
+        QStringLiteral("尚未选择文件；最大支持6,400,000B"),
+        pPayloadGroup
+    );
+    m_pFileInfoLabel->setWordWrap(true);
+    m_pFileInfoLabel->setObjectName(QStringLiteral("hintLabel"));
+    pPayloadLayout->addWidget(m_pFileInfoLabel);
     m_pPrepareButton = new QPushButton(
         QStringLiteral("生成并下发本轮CA材料"),
         pPayloadGroup
@@ -341,8 +416,8 @@ QWidget* ManagerMainWindow::pCreateConfigurationPage()
     pPayloadLayout->addWidget(m_pCommunicationValue);
     QLabel* pBoundaryLabel = new QLabel(
         QStringLiteral(
-            "Message固定32B；文本内容使用独立控制消息下发，"
-            "不会与算法配置或UDP序列化混用。"
+            "Message固定32B；文件通过TCP原始二进制分块上传，Sender完整接收后"
+            "重新切成32B Message，TCP分块不会与UDP序列化类型混用。"
         ),
         pPayloadGroup
     );
@@ -370,6 +445,15 @@ QWidget* ManagerMainWindow::pCreateConfigurationPage()
     );
     connect(
         m_pAlgorithmCombo,
+        &QComboBox::currentIndexChanged,
+        this,
+        [fnInputChanged](int)
+        {
+            fnInputChanged();
+        }
+    );
+    connect(
+        m_pPayloadCombo,
         &QComboBox::currentIndexChanged,
         this,
         [fnInputChanged](int)
@@ -406,7 +490,13 @@ QWidget* ManagerMainWindow::pCreateConfigurationPage()
         m_pPrepareButton,
         &QPushButton::clicked,
         this,
-        &ManagerMainWindow::prepareTextRound
+        &ManagerMainWindow::prepareRound
+    );
+    connect(
+        m_pSelectFileButton,
+        &QPushButton::clicked,
+        this,
+        &ManagerMainWindow::selectFile
     );
 
     return pPage;
@@ -439,25 +529,25 @@ QWidget* ManagerMainWindow::pCreateExperimentPage()
         m_pStartButton,
         &QPushButton::clicked,
         this,
-        &ManagerMainWindow::startTextRound
+        &ManagerMainWindow::startRound
     );
     connect(
         m_pPauseButton,
         &QPushButton::clicked,
         this,
-        &ManagerMainWindow::pauseTextRound
+        &ManagerMainWindow::pauseRound
     );
     connect(
         m_pResumeButton,
         &QPushButton::clicked,
         this,
-        &ManagerMainWindow::resumeTextRound
+        &ManagerMainWindow::resumeRound
     );
     connect(
         m_pStopButton,
         &QPushButton::clicked,
         this,
-        &ManagerMainWindow::stopTextRound
+        &ManagerMainWindow::stopRound
     );
 
     return pPage;
@@ -512,13 +602,37 @@ QWidget* ManagerMainWindow::pCreateAttackPage()
 
 QWidget* ManagerMainWindow::pCreateFileComparisonPage()
 {
-    return pCreateStagePlaceholder(
-        QStringLiteral("文件Hash比较"),
+    QWidget* pPage = new QWidget(this);
+    QVBoxLayout* pLayout = new QVBoxLayout(pPage);
+    QLabel* pHintLabel = new QLabel(
         QStringLiteral(
-            "阶段7接入原始文件大小、SHA-256和各Receiver恢复结果。"
-            "集中管理GUI不会在此汇总全部认证结果。"
-        )
+            "这里只比较原文件与各Receiver恢复文件的大小和SHA-256，"
+            "不建立全部认证结果汇总页面。"
+        ),
+        pPage
     );
+    pHintLabel->setWordWrap(true);
+    pHintLabel->setObjectName(QStringLiteral("hintLabel"));
+    pLayout->addWidget(pHintLabel);
+
+    m_pFileComparisonTable = new QTableWidget(0, 7, pPage);
+    m_pFileComparisonTable->setHorizontalHeaderLabels({
+        QStringLiteral("Sender"),
+        QStringLiteral("chainId"),
+        QStringLiteral("原大小"),
+        QStringLiteral("恢复大小"),
+        QStringLiteral("原SHA-256"),
+        QStringLiteral("恢复SHA-256"),
+        QStringLiteral("结果")
+    });
+    m_pFileComparisonTable->horizontalHeader()->setSectionResizeMode(
+        QHeaderView::ResizeToContents
+    );
+    m_pFileComparisonTable->horizontalHeader()->setStretchLastSection(true);
+    m_pFileComparisonTable->verticalHeader()->setVisible(false);
+    m_pFileComparisonTable->setAlternatingRowColors(true);
+    pLayout->addWidget(m_pFileComparisonTable, 1);
+    return pPage;
 }
 
 QWidget* ManagerMainWindow::pCreateStagePlaceholder(
@@ -646,6 +760,7 @@ void ManagerMainWindow::validateAuthenticationInputs()
     }
 
     const bool bImproved = m_pModeCombo->currentIndex() == 1;
+    const bool bFileMode = m_pPayloadCombo->currentIndex() == 1;
     const int nPacketsPerInterval = m_pPacketsSpin->value();
     const int nGroupSize = m_pGroupSpin->value();
     const int nDetectionThreshold = m_pThresholdSpin->value();
@@ -653,6 +768,10 @@ void ManagerMainWindow::validateAuthenticationInputs()
 
     m_pGroupSpin->setEnabled(bImproved);
     m_pThresholdSpin->setEnabled(bImproved);
+    m_pTextEdit->setEnabled(!bFileMode);
+    m_pRepeatSpin->setEnabled(!bFileMode);
+    m_pSelectFileButton->setEnabled(bFileMode);
+    refreshSelectedFileInformation();
 
     QStringList listErrors;
     bool bPacketGroupingValid = true;
@@ -693,16 +812,31 @@ void ManagerMainWindow::validateAuthenticationInputs()
         }
     }
 
-    const bool bTextValid = !arrText.isEmpty()
-        && arrText.size()
-            <= static_cast<qsizetype>(
-                tesla::protocol::BINARY_BLOCK_SIZE
-            )
-        && !arrText.contains('\0');
+    const bool bTextValid = bFileMode || (
+        !arrText.isEmpty()
+        && arrText.size() <= static_cast<qsizetype>(
+            tesla::protocol::BINARY_BLOCK_SIZE
+        )
+        && !arrText.contains('\0')
+    );
+    const bool bFileValid = !bFileMode || (
+        m_ptrSelectedFileBytes
+        && !m_ptrSelectedFileBytes->isEmpty()
+        && m_ptrSelectedFileBytes->size() <= static_cast<qsizetype>(
+            tesla::workload::FileWorkload::MAXIMUM_FILE_SIZE
+        )
+        && m_arrSelectedFileSha256.size() == 32
+    );
     if (!bTextValid)
     {
         listErrors.append(QStringLiteral(
             "文本必须是1至32字节UTF-8内容且不能包含零字节"
+        ));
+    }
+    if (!bFileValid)
+    {
+        listErrors.append(QStringLiteral(
+            "请选择1至6,400,000字节的完整文件"
         ));
     }
 
@@ -720,6 +854,7 @@ void ManagerMainWindow::validateAuthenticationInputs()
     fnSetInvalid(m_pGroupSpin, !bPacketGroupingValid);
     fnSetInvalid(m_pThresholdSpin, !bThresholdValid);
     fnSetInvalid(m_pTextEdit, !bTextValid);
+    fnSetInvalid(m_pSelectFileButton, !bFileValid);
 
     m_bAuthenticationInputsValid = listErrors.isEmpty();
     m_pValidationLabel->setText(
@@ -739,8 +874,17 @@ void ManagerMainWindow::validateAuthenticationInputs()
     }
     else
     {
-        const std::uint64_t u64PacketCount =
-            static_cast<std::uint64_t>(m_pRepeatSpin->value());
+        const std::uint64_t u64PacketCount = bFileMode
+            ? static_cast<std::uint64_t>(
+                (m_ptrSelectedFileBytes->size()
+                    + static_cast<qsizetype>(
+                        tesla::workload::FileWorkload::MESSAGE_SIZE
+                    ) - 1)
+                / static_cast<qsizetype>(
+                    tesla::workload::FileWorkload::MESSAGE_SIZE
+                )
+            )
+            : static_cast<std::uint64_t>(m_pRepeatSpin->value());
         const std::uint64_t u64DataIntervalCount =
             (u64PacketCount
                 + static_cast<std::uint64_t>(nPacketsPerInterval) - 1U)
@@ -821,7 +965,101 @@ void ManagerMainWindow::refreshAuthenticationActions()
     m_pStopButton->setEnabled(bRunning);
 }
 
-void ManagerMainWindow::prepareTextRound()
+void ManagerMainWindow::selectFile()
+{
+    const QString strFilePath = QFileDialog::getOpenFileName(
+        this,
+        QStringLiteral("选择认证文件")
+    );
+    if (strFilePath.isEmpty())
+    {
+        return;
+    }
+
+    const QFileInfo infFile(strFilePath);
+    if (!infFile.isFile() || infFile.size() <= 0
+        || infFile.size() > static_cast<qint64>(
+            tesla::workload::FileWorkload::MAXIMUM_FILE_SIZE
+        ))
+    {
+        m_pStatusLabel->setText(QStringLiteral(
+            "文件必须存在且大小为1至6,400,000字节"
+        ));
+        return;
+    }
+
+    QFile fileSource(strFilePath);
+    if (!fileSource.open(QIODevice::ReadOnly))
+    {
+        m_pStatusLabel->setText(QStringLiteral("无法读取所选文件"));
+        return;
+    }
+
+    const QByteArray arrFileBytes = fileSource.readAll();
+    if (arrFileBytes.size() != infFile.size())
+    {
+        m_pStatusLabel->setText(QStringLiteral("文件读取长度发生变化，请重新选择"));
+        return;
+    }
+
+    m_strSelectedFilePath = strFilePath;
+    m_ptrSelectedFileBytes = std::make_shared<const QByteArray>(arrFileBytes);
+    m_arrSelectedFileSha256 = QCryptographicHash::hash(
+        arrFileBytes,
+        QCryptographicHash::Sha256
+    );
+    m_bPreparedConfigurationCurrent = false;
+    validateAuthenticationInputs();
+}
+
+void ManagerMainWindow::refreshSelectedFileInformation()
+{
+    if (!m_ptrSelectedFileBytes)
+    {
+        m_pFileInfoLabel->setText(QStringLiteral(
+            "尚未选择文件；最大支持6,400,000B"
+        ));
+        return;
+    }
+
+    const QFileInfo infFile(m_strSelectedFilePath);
+    const std::uint64_t u64PacketCount = static_cast<std::uint64_t>(
+        (m_ptrSelectedFileBytes->size()
+            + static_cast<qsizetype>(
+                tesla::workload::FileWorkload::MESSAGE_SIZE
+            ) - 1)
+        / static_cast<qsizetype>(
+            tesla::workload::FileWorkload::MESSAGE_SIZE
+        )
+    );
+    const std::uint64_t u64IntervalCount =
+        (u64PacketCount + m_pPacketsSpin->value() - 1U)
+        / static_cast<std::uint64_t>(m_pPacketsSpin->value());
+    const std::uint64_t u64EstimatedDataDuration =
+        u64IntervalCount * m_pIntervalSpin->value();
+    const std::uint64_t u64EstimatedCompleteDuration =
+        (u64IntervalCount + m_pDisclosureSpin->value())
+        * m_pIntervalSpin->value();
+
+    // 参数变化后同步刷新全部自动值，避免界面仍显示选择文件时的旧估算。
+    m_pFileInfoLabel->setText(
+        QStringLiteral(
+            "文件：%1\n类型：%2，大小：%3B，Message：固定32B，分片：%4，"
+            "数据间隔：%5，链长度：%6，预计数据发送：%7ms，"
+            "预计认证完成：%8ms\n原始SHA-256：%9"
+        )
+            .arg(infFile.fileName(), infFile.suffix().toLower())
+            .arg(m_ptrSelectedFileBytes->size())
+            .arg(u64PacketCount)
+            .arg(u64IntervalCount)
+            .arg(u64IntervalCount + 1U)
+            .arg(u64EstimatedDataDuration)
+            .arg(u64EstimatedCompleteDuration)
+            .arg(QString::fromLatin1(m_arrSelectedFileSha256.toHex()))
+    );
+}
+
+void ManagerMainWindow::prepareRound()
 {
     try
     {
@@ -849,27 +1087,52 @@ void ManagerMainWindow::prepareTextRound()
                 tesla::protocol::AuthenticationCryptoAlgorithm::Sha3_256;
         }
 
-        const ManagerTextRoundConfiguration cfgRound(
-            bImproved
-                ? tesla::protocol::UdpAuthenticationMode::Improved
-                : tesla::protocol::UdpAuthenticationMode::Native,
-            algCrypto,
-            static_cast<std::uint32_t>(m_pRepeatSpin->value()),
-            static_cast<std::uint32_t>(m_pPacketsSpin->value()),
-            static_cast<std::uint32_t>(m_pDisclosureSpin->value()),
-            static_cast<std::uint32_t>(m_pIntervalSpin->value()),
-            std::move(optImprovedParameters),
-            m_pTextEdit->toPlainText()
-        );
-
         QString strError;
-        m_bPreparedConfigurationCurrent =
-            m_ctlAuthentication.bPrepareTextRound(
+        if (m_pPayloadCombo->currentIndex() == 0)
+        {
+            const ManagerTextRoundConfiguration cfgRound(
+                bImproved
+                    ? tesla::protocol::UdpAuthenticationMode::Improved
+                    : tesla::protocol::UdpAuthenticationMode::Native,
+                algCrypto,
+                static_cast<std::uint32_t>(m_pRepeatSpin->value()),
+                static_cast<std::uint32_t>(m_pPacketsSpin->value()),
+                static_cast<std::uint32_t>(m_pDisclosureSpin->value()),
+                static_cast<std::uint32_t>(m_pIntervalSpin->value()),
+                std::move(optImprovedParameters),
+                m_pTextEdit->toPlainText()
+            );
+            m_bPreparedConfigurationCurrent =
+                m_ctlAuthentication.bPrepareTextRound(
+                    cfgRound,
+                    m_setSelectedSenderEndpoints,
+                    m_ctlNetwork.vecNodeSnapshots(),
+                    strError
+                );
+        }
+        else
+        {
+            const ManagerFileRoundConfiguration cfgRound(
+                bImproved
+                    ? tesla::protocol::UdpAuthenticationMode::Improved
+                    : tesla::protocol::UdpAuthenticationMode::Native,
+                algCrypto,
+                static_cast<std::uint32_t>(m_pPacketsSpin->value()),
+                static_cast<std::uint32_t>(m_pDisclosureSpin->value()),
+                static_cast<std::uint32_t>(m_pIntervalSpin->value()),
+                std::move(optImprovedParameters),
+                m_ptrSelectedFileBytes,
+                m_arrSelectedFileSha256
+            );
+            m_pFileComparisonTable->setRowCount(0);
+            m_bPreparedConfigurationCurrent =
+                m_ctlAuthentication.bPrepareFileRound(
                 cfgRound,
                 m_setSelectedSenderEndpoints,
                 m_ctlNetwork.vecNodeSnapshots(),
                 strError
             );
+        }
         if (!m_bPreparedConfigurationCurrent)
         {
             m_pStatusLabel->setText(strError);
@@ -884,7 +1147,7 @@ void ManagerMainWindow::prepareTextRound()
     }
 }
 
-void ManagerMainWindow::startTextRound()
+void ManagerMainWindow::startRound()
 {
     QString strError;
     if (!m_ctlAuthentication.bStartRound(strError))
@@ -898,7 +1161,7 @@ void ManagerMainWindow::startTextRound()
     ));
 }
 
-void ManagerMainWindow::pauseTextRound()
+void ManagerMainWindow::pauseRound()
 {
     QString strError;
     if (!m_ctlAuthentication.bPauseRound(strError))
@@ -912,7 +1175,7 @@ void ManagerMainWindow::pauseTextRound()
     ));
 }
 
-void ManagerMainWindow::resumeTextRound()
+void ManagerMainWindow::resumeRound()
 {
     QString strError;
     if (!m_ctlAuthentication.bResumeRound(strError))
@@ -926,7 +1189,7 @@ void ManagerMainWindow::resumeTextRound()
     ));
 }
 
-void ManagerMainWindow::stopTextRound()
+void ManagerMainWindow::stopRound()
 {
     QString strError;
     if (!m_ctlAuthentication.bStopRound(strError))

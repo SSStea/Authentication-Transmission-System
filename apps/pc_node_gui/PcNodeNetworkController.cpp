@@ -1,15 +1,19 @@
 #include "PcNodeNetworkController.h"
 
+#include "tesla/core/FileUploadSession.h"
 #include "tesla/protocol/NodeControlJsonCodec.h"
 
 #include <QAbstractSocket>
 #include <QDateTime>
+#include <QDir>
 #include <QHostAddress>
 #include <QMetaObject>
 #include <QNetworkAddressEntry>
 #include <QNetworkInterface>
 #include <QProcess>
+#include <QSaveFile>
 #include <QSet>
+#include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
@@ -17,6 +21,8 @@
 #include <QUdpSocket>
 
 #include <algorithm>
+#include <atomic>
+#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -98,12 +104,73 @@ std::uint64_t u64NowMilliseconds()
 {
     return static_cast<std::uint64_t>(QDateTime::currentMSecsSinceEpoch());
 }
+
+QString strSafeFileComponent(const std::string& strValue)
+{
+    QString strResult = QString::fromStdString(strValue);
+    for (qsizetype nIndex = 0; nIndex < strResult.size(); ++nIndex)
+    {
+        const QChar chValue = strResult.at(nIndex);
+        if (!chValue.isLetterOrNumber()
+            && chValue != QLatin1Char('-')
+            && chValue != QLatin1Char('_'))
+        {
+            strResult[nIndex] = QLatin1Char('_');
+        }
+    }
+    return strResult;
+}
+
+bool bPersistRecoveredFile(
+    const std::string& strRoundId,
+    const std::string& strSenderId,
+    std::uint64_t u64ChainId,
+    const ByteBuffer& vecFileBytes
+)
+{
+    const QString strDirectory = QStandardPaths::writableLocation(
+        QStandardPaths::AppDataLocation
+    ) + QStringLiteral("/recovered_files");
+    if (!QDir().mkpath(strDirectory))
+    {
+        return false;
+    }
+
+    const QString strFilePath = strDirectory + QStringLiteral("/")
+        + strSafeFileComponent(strRoundId) + QStringLiteral("_")
+        + strSafeFileComponent(strSenderId) + QStringLiteral("_")
+        + QString::number(u64ChainId) + QStringLiteral(".bin");
+    QSaveFile fileRecovered(strFilePath);
+    if (!fileRecovered.open(QIODevice::WriteOnly))
+    {
+        return false;
+    }
+
+    if (fileRecovered.write(arrToByteArray(vecFileBytes))
+        != static_cast<qint64>(vecFileBytes.size()))
+    {
+        fileRecovered.cancelWriting();
+        return false;
+    }
+    return fileRecovered.commit();
+}
 }
 
 struct PcNodeNetworkController::ClientState final
 {
+    ~ClientState()
+    {
+        if (thrFilePreparation.joinable())
+        {
+            thrFilePreparation.join();
+        }
+    }
+
     QTcpSocket*           pSocket = nullptr;
     TcpFrameStreamDecoder decStream;
+    tesla::core::FileUploadSession uplFile;
+    std::thread           thrFilePreparation;
+    std::atomic<bool>     bFilePreparationRunning{false};
     bool                  bHelloReceived = false;
     TcpClientRole         roleClient = TcpClientRole::Monitor;
 };
@@ -153,7 +220,8 @@ PcNodeNetworkController::PcNodeNetworkController(
             [this]()
             {
                 return stsQueryTimeSynchronization();
-            }
+            },
+            bPersistRecoveredFile
         );
 
     m_pHeartbeatTimer->setInterval(
@@ -263,12 +331,6 @@ void PcNodeNetworkController::stop() noexcept
 {
     m_bRunning = false;
 
-    // 先等待认证工作线程退出，再关闭Qt Socket，避免生命周期交叉。
-    if (m_ptrAuthenticationRuntime)
-    {
-        m_ptrAuthenticationRuntime->stop();
-    }
-
     {
         std::lock_guard<std::mutex> lckQueue(m_mtxAuthenticationSendQueue);
         m_deqAuthenticationSendQueue.clear();
@@ -288,7 +350,20 @@ void PcNodeNetworkController::stop() noexcept
         pSocket->abort();
         pSocket->deleteLater();
     }
+    for (const std::shared_ptr<ClientState>& ptrClient : m_mapClients)
+    {
+        if (ptrClient->thrFilePreparation.joinable())
+        {
+            ptrClient->thrFilePreparation.join();
+        }
+    }
     m_mapClients.clear();
+
+    // 文件准备线程持有公共运行时；先等待这些线程，再停止认证工作线程。
+    if (m_ptrAuthenticationRuntime)
+    {
+        m_ptrAuthenticationRuntime->stop();
+    }
     emit stateChanged();
 }
 
@@ -410,14 +485,52 @@ bool PcNodeNetworkController::bHandleClientFrame(
 {
     if (!std::holds_alternative<JsonControlFramePayload>(frmFrame.varPayload()))
     {
-        bSendNodeControl(
-            ptrClient,
-            NodeControlMessage(ErrorResponseControlDetails(
-                "",
-                "STAGE5_FILE_UNAVAILABLE",
-                "PC node file upload is implemented in stage 7"
-            ))
-        );
+        if (!ptrClient->bHelloReceived)
+        {
+            bSendNodeControl(
+                ptrClient,
+                NodeControlMessage(ErrorResponseControlDetails(
+                    "",
+                    "HELLO_REQUIRED",
+                    "The first PC node control message must be CLIENT_HELLO"
+                ))
+            );
+            return false;
+        }
+
+        if (ptrClient->roleClient == TcpClientRole::Monitor
+            || ptrClient->bFilePreparationRunning.load())
+        {
+            return bSendNodeControl(
+                ptrClient,
+                NodeControlMessage(ErrorResponseControlDetails(
+                    "",
+                    ptrClient->roleClient == TcpClientRole::Monitor
+                        ? "MONITOR_FILE_FORBIDDEN"
+                        : "FILE_PREPARATION_ACTIVE",
+                    "Binary file chunk is not allowed in the current connection state"
+                ))
+            );
+        }
+
+        try
+        {
+            ptrClient->uplFile.append(std::get<FileBinaryChunk>(
+                frmFrame.varPayload()
+            ));
+        }
+        catch (const std::exception& exError)
+        {
+            ptrClient->uplFile.reset();
+            return bSendNodeControl(
+                ptrClient,
+                NodeControlMessage(ErrorResponseControlDetails(
+                    "",
+                    "INVALID_FILE_UPLOAD",
+                    exError.what()
+                ))
+            );
+        }
         return true;
     }
 
@@ -467,6 +580,164 @@ bool PcNodeNetworkController::bHandleJson(
         ).roleClient();
         ptrClient->bHelloReceived = true;
         return true;
+    }
+
+    if (msgMessage.typeMessage() == NodeControlMessageType::FileUploadBegin)
+    {
+        const FileUploadBeginControlDetails& detUpload = std::get<
+            FileUploadBeginControlDetails
+        >(msgMessage.varDetails());
+        if (ptrClient->roleClient == TcpClientRole::Monitor)
+        {
+            return bSendNodeControl(
+                ptrClient,
+                NodeControlMessage(
+                    AuthenticationConfigAcknowledgementControlDetails(
+                        detUpload.strRequestId(),
+                        AuthenticationConfigTarget::FilePayload,
+                        false,
+                        "MONITOR_FILE_FORBIDDEN",
+                        "Monitor clients cannot begin a file upload"
+                    )
+                )
+            );
+        }
+
+        try
+        {
+            if (ptrClient->bFilePreparationRunning.load())
+            {
+                throw std::logic_error(
+                    "The previous file is still being prepared"
+                );
+            }
+            ptrClient->uplFile.begin(
+                detUpload.strRequestId(),
+                detUpload.u64ChainId(),
+                detUpload.u64OriginalByteCount()
+            );
+            return true;
+        }
+        catch (const std::exception& exError)
+        {
+            ptrClient->uplFile.reset();
+            return bSendNodeControl(
+                ptrClient,
+                NodeControlMessage(
+                    AuthenticationConfigAcknowledgementControlDetails(
+                        detUpload.strRequestId(),
+                        AuthenticationConfigTarget::FilePayload,
+                        false,
+                        "INVALID_FILE_UPLOAD",
+                        exError.what()
+                    )
+                )
+            );
+        }
+    }
+
+    if (msgMessage.typeMessage() == NodeControlMessageType::FileUploadEnd)
+    {
+        const FileUploadEndControlDetails& detUpload = std::get<
+            FileUploadEndControlDetails
+        >(msgMessage.varDetails());
+        if (ptrClient->bFilePreparationRunning.load())
+        {
+            return bSendNodeControl(
+                ptrClient,
+                NodeControlMessage(
+                    AuthenticationConfigAcknowledgementControlDetails(
+                        detUpload.strRequestId(),
+                        AuthenticationConfigTarget::FilePayload,
+                        false,
+                        "FILE_PREPARATION_ACTIVE",
+                        "A file preparation worker is already active"
+                    )
+                )
+            );
+        }
+
+        try
+        {
+            tesla::workload::FileWorkload wrkFile =
+                ptrClient->uplFile.wrkComplete(
+                    detUpload.strRequestId(),
+                    detUpload.u64ChainId(),
+                    detUpload.u32ChunkCount(),
+                    detUpload.u64TransferredByteCount()
+                );
+            ptrClient->bFilePreparationRunning = true;
+            if (ptrClient->thrFilePreparation.joinable())
+            {
+                ptrClient->thrFilePreparation.join();
+            }
+
+            const std::weak_ptr<ClientState> wptrClient(ptrClient);
+            const TcpClientRole roleClient = ptrClient->roleClient;
+            const std::string strRequestId = detUpload.strRequestId();
+            const std::uint64_t u64ChainId = detUpload.u64ChainId();
+            ptrClient->thrFilePreparation = std::thread(
+                [
+                    this,
+                    wptrClient,
+                    roleClient,
+                    strRequestId,
+                    u64ChainId,
+                    wrkFile = std::move(wrkFile)
+                ]() mutable
+                {
+                    NodeControlMessage msgResponse =
+                        m_ptrAuthenticationRuntime->msgApplyFilePayload(
+                            roleClient,
+                            strRequestId,
+                            u64ChainId,
+                            std::move(wrkFile)
+                        );
+                    QMetaObject::invokeMethod(
+                        this,
+                        [
+                            this,
+                            wptrClient,
+                            msgResponse = std::move(msgResponse)
+                        ]()
+                        {
+                            const std::shared_ptr<ClientState> ptrCurrent =
+                                wptrClient.lock();
+                            if (ptrCurrent)
+                            {
+                                ptrCurrent->bFilePreparationRunning = false;
+                                bSendNodeControl(ptrCurrent, msgResponse);
+                            }
+                        },
+                        Qt::QueuedConnection
+                    );
+                }
+            );
+            emit logMessage(QStringLiteral(
+                "文件上传完成，正在后台生成32B认证报文"
+            ));
+            emit fileStatusMessage(QStringLiteral(
+                "已完整接收 %1 个TCP上传分块，正在后台生成32B TESLA Message"
+            ).arg(detUpload.u32ChunkCount()));
+            return true;
+        }
+        catch (const std::exception& exError)
+        {
+            ptrClient->bFilePreparationRunning = false;
+            ptrClient->uplFile.reset();
+            return bSendNodeControl(
+                ptrClient,
+                NodeControlMessage(
+                    AuthenticationConfigAcknowledgementControlDetails(
+                        detUpload.strRequestId(),
+                        AuthenticationConfigTarget::FilePayload,
+                        false,
+                        "INVALID_FILE_UPLOAD",
+                        exError.what()
+                    )
+                )
+            );
+        }
     }
 
     if (msgMessage.typeMessage() == NodeControlMessageType::Ping)
@@ -633,7 +904,7 @@ void PcNodeNetworkController::processAuthenticationRuntimeEvent(
                         detResult.u32AuthenticatedPacketCount(),
                         detResult.u32FailedPacketCount(),
                         detResult.u32MissingPacketCount(),
-                        detResult.strRecoveredText(),
+                        detResult.varResultDetails(),
                         "Qt multicast send queue reported a socket failure"
                     )
                 );
@@ -647,20 +918,76 @@ void PcNodeNetworkController::processAuthenticationRuntimeEvent(
         const auto& detResult = std::get<
             AuthenticationRoundResultControlDetails
         >(msgMessage.varDetails());
-        emit logMessage(
-            QStringLiteral(
-                "认证结果 %1 / chainId=%2：通过 %3/%4，失败 %5，"
-                "缺失 %6，恢复文本“%7”；%8"
+        QString strPayloadStatus;
+        if (std::holds_alternative<TextAuthenticationRoundResultDetails>(
+                detResult.varResultDetails()
+            ))
+        {
+            strPayloadStatus = QStringLiteral("恢复文本“%1”").arg(
+                QString::fromStdString(
+                    std::get<TextAuthenticationRoundResultDetails>(
+                        detResult.varResultDetails()
+                    ).strRecoveredText()
+                )
+            );
+        }
+        else if (std::holds_alternative<
+            FileSenderAuthenticationRoundResultDetails
+        >(detResult.varResultDetails()))
+        {
+            strPayloadStatus = QStringLiteral("文件发送大小 %1B").arg(
+                std::get<FileSenderAuthenticationRoundResultDetails>(
+                    detResult.varResultDetails()
+                ).u64OriginalByteCount()
+            );
+            emit fileStatusMessage(QStringLiteral(
+                "Sender %1 / chainId=%2：%3；%4"
             )
                 .arg(QString::fromStdString(detResult.strSenderId()))
                 .arg(detResult.u64ChainId())
-                .arg(detResult.u32AuthenticatedPacketCount())
-                .arg(detResult.u32ExpectedPacketCount())
-                .arg(detResult.u32FailedPacketCount())
-                .arg(detResult.u32MissingPacketCount())
-                .arg(QString::fromStdString(detResult.strRecoveredText()))
-                .arg(QString::fromStdString(detResult.strMessage()))
-        );
+                .arg(strPayloadStatus)
+                .arg(QString::fromStdString(detResult.strMessage())));
+        }
+        else
+        {
+            const FileReceiverAuthenticationRoundResultDetails& detFile =
+                std::get<FileReceiverAuthenticationRoundResultDetails>(
+                    detResult.varResultDetails()
+                );
+            strPayloadStatus = QStringLiteral("恢复文件 %1/%2B，SHA-256=%3")
+                .arg(detFile.u64RecoveredByteCount())
+                .arg(detFile.u64OriginalByteCount())
+                .arg(detFile.optRecoveredSha256().has_value()
+                    ? QString::fromStdString(
+                        AuthenticationControlValueCodec::strEncodeBlock(
+                            detFile.optRecoveredSha256().value()
+                        )
+                    )
+                    : QStringLiteral("无"));
+            const QString strRecoveredDirectory =
+                QStandardPaths::writableLocation(
+                    QStandardPaths::AppDataLocation
+                ) + QStringLiteral("/recovered_files");
+            emit fileStatusMessage(QStringLiteral(
+                "Receiver恢复 %1 / chainId=%2：%3；落盘目录 %4；%5"
+            )
+                .arg(QString::fromStdString(detResult.strSenderId()))
+                .arg(detResult.u64ChainId())
+                .arg(strPayloadStatus, strRecoveredDirectory)
+                .arg(QString::fromStdString(detResult.strMessage())));
+        }
+
+        emit logMessage(QStringLiteral(
+            "认证结果 %1 / chainId=%2：通过 %3/%4，失败 %5，缺失 %6，%7；%8"
+        )
+            .arg(QString::fromStdString(detResult.strSenderId()))
+            .arg(detResult.u64ChainId())
+            .arg(detResult.u32AuthenticatedPacketCount())
+            .arg(detResult.u32ExpectedPacketCount())
+            .arg(detResult.u32FailedPacketCount())
+            .arg(detResult.u32MissingPacketCount())
+            .arg(strPayloadStatus)
+            .arg(QString::fromStdString(detResult.strMessage())));
     }
     emit stateChanged();
 }

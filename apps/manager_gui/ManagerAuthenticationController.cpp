@@ -2,7 +2,9 @@
 
 #include "tesla/core/AuthenticationRoundParameters.h"
 #include "tesla/protocol/NodeControlJsonCodec.h"
+#include "tesla/workload/FileWorkload.h"
 
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QStringList>
 #include <QUuid>
@@ -174,6 +176,108 @@ const QString& ManagerTextRoundConfiguration::strText() const noexcept
     return m_strText;
 }
 
+ManagerFileRoundConfiguration::ManagerFileRoundConfiguration(
+    tesla::protocol::UdpAuthenticationMode modeAuthentication,
+    tesla::protocol::AuthenticationCryptoAlgorithm algCryptoAlgorithm,
+    std::uint32_t u32PacketsPerInterval,
+    std::uint32_t u32DisclosureDelay,
+    std::uint32_t u32IntervalMilliseconds,
+    std::optional<tesla::protocol::ImprovedTeslaControlParameters>
+        optImprovedParameters,
+    std::shared_ptr<const QByteArray> ptrFileBytes,
+    QByteArray arrOriginalSha256
+)
+    : m_modeAuthentication(modeAuthentication),
+      m_algCryptoAlgorithm(algCryptoAlgorithm),
+      m_u32PacketsPerInterval(u32PacketsPerInterval),
+      m_u32DisclosureDelay(u32DisclosureDelay),
+      m_u32IntervalMilliseconds(u32IntervalMilliseconds),
+      m_optImprovedParameters(std::move(optImprovedParameters)),
+      m_ptrFileBytes(std::move(ptrFileBytes)),
+      m_arrOriginalSha256(std::move(arrOriginalSha256))
+{
+    if (m_u32PacketsPerInterval == 0 || m_u32DisclosureDelay == 0
+        || m_u32IntervalMilliseconds == 0 || !m_ptrFileBytes
+        || m_ptrFileBytes->isEmpty()
+        || m_ptrFileBytes->size() > static_cast<qsizetype>(
+            tesla::workload::FileWorkload::MAXIMUM_FILE_SIZE
+        )
+        || m_arrOriginalSha256.size()
+            != static_cast<qsizetype>(tesla::protocol::BINARY_BLOCK_SIZE)
+        || QCryptographicHash::hash(
+                *m_ptrFileBytes,
+                QCryptographicHash::Sha256
+            ) != m_arrOriginalSha256)
+    {
+        throw std::invalid_argument("File authentication input is invalid");
+    }
+
+    if (m_modeAuthentication == tesla::protocol::UdpAuthenticationMode::Native
+        && m_optImprovedParameters.has_value())
+    {
+        throw std::invalid_argument(
+            "Native TESLA must not contain improved parameters"
+        );
+    }
+
+    if (m_modeAuthentication
+            == tesla::protocol::UdpAuthenticationMode::Improved
+        && !m_optImprovedParameters.has_value())
+    {
+        throw std::invalid_argument(
+            "Improved TESLA requires grouping parameters"
+        );
+    }
+}
+
+tesla::protocol::UdpAuthenticationMode
+ManagerFileRoundConfiguration::modeAuthentication() const noexcept
+{
+    return m_modeAuthentication;
+}
+
+tesla::protocol::AuthenticationCryptoAlgorithm
+ManagerFileRoundConfiguration::algCryptoAlgorithm() const noexcept
+{
+    return m_algCryptoAlgorithm;
+}
+
+std::uint32_t
+ManagerFileRoundConfiguration::u32PacketsPerInterval() const noexcept
+{
+    return m_u32PacketsPerInterval;
+}
+
+std::uint32_t
+ManagerFileRoundConfiguration::u32DisclosureDelay() const noexcept
+{
+    return m_u32DisclosureDelay;
+}
+
+std::uint32_t
+ManagerFileRoundConfiguration::u32IntervalMilliseconds() const noexcept
+{
+    return m_u32IntervalMilliseconds;
+}
+
+const std::optional<tesla::protocol::ImprovedTeslaControlParameters>&
+ManagerFileRoundConfiguration::optImprovedParameters() const noexcept
+{
+    return m_optImprovedParameters;
+}
+
+const std::shared_ptr<const QByteArray>&
+ManagerFileRoundConfiguration::ptrFileBytes() const noexcept
+{
+    return m_ptrFileBytes;
+}
+
+const QByteArray&
+ManagerFileRoundConfiguration::arrOriginalSha256() const noexcept
+{
+    return m_arrOriginalSha256;
+}
+
 ManagerAuthenticationController::ManagerAuthenticationController(
     ManagerNetworkController& ctlNetwork,
     QObject* pParent
@@ -185,6 +289,7 @@ ManagerAuthenticationController::ManagerAuthenticationController(
       m_bConfigurationReady(false),
       m_bRoundRunning(false),
       m_bRoundPaused(false),
+      m_bFileRound(false),
       m_u32IntervalMilliseconds(0),
       m_u32LastLogicalInterval(0),
       m_u32TimelineFirstInterval(1),
@@ -198,6 +303,12 @@ ManagerAuthenticationController::ManagerAuthenticationController(
         &ManagerNetworkController::nodeControlJsonReceived,
         this,
         &ManagerAuthenticationController::processNodeControlJson
+    );
+    connect(
+        &m_ctlNetwork,
+        &ManagerNetworkController::nodesChanged,
+        this,
+        &ManagerAuthenticationController::handleNodeStateChanged
     );
 }
 
@@ -218,6 +329,7 @@ bool ManagerAuthenticationController::bPrepareTextRound(
         }
 
         resetPreparedRound();
+        m_bFileRound = false;
         std::map<QString, ManagerNodeSnapshot> mapSnapshots;
         for (const ManagerNodeSnapshot& snpNode : vecNodeSnapshots)
         {
@@ -365,7 +477,10 @@ bool ManagerAuthenticationController::bPrepareTextRound(
                     tgtSender.strIpAddress.toStdString(),
                     matMaterial.u64ChainId(),
                     arrBlock(matMaterial.digCommitmentKey()),
-                    prmControlParameters(matMaterial.prmRoundParameters())
+                    prmControlParameters(matMaterial.prmRoundParameters()),
+                    tesla::protocol::TextReceiverPayloadControlDetails(
+                        cfgRound.u32TextRepeatCount()
+                    )
                 );
             }
 
@@ -401,6 +516,216 @@ bool ManagerAuthenticationController::bPrepareTextRound(
         emit configurationStateChanged(
             false,
             QStringLiteral("配置已下发，等待 %1 个节点确认")
+                .arg(m_setPendingConfigurationRequests.size())
+        );
+        return true;
+    }
+    catch (const std::exception& exError)
+    {
+        resetPreparedRound();
+        strError = QString::fromUtf8(exError.what());
+        return false;
+    }
+}
+
+bool ManagerAuthenticationController::bPrepareFileRound(
+    const ManagerFileRoundConfiguration& cfgRound,
+    const QSet<QString>& setSelectedSenderEndpoints,
+    const QVector<ManagerNodeSnapshot>& vecNodeSnapshots,
+    QString& strError
+)
+{
+    try
+    {
+        if (m_bRoundRunning)
+        {
+            throw std::logic_error(
+                "An active authentication round must be stopped first"
+            );
+        }
+
+        resetPreparedRound();
+        m_bFileRound = true;
+        std::map<QString, ManagerNodeSnapshot> mapSnapshots;
+        for (const ManagerNodeSnapshot& snpNode : vecNodeSnapshots)
+        {
+            if (snpNode.roleNode() != tesla::protocol::NodeRole::Attacker
+                && snpNode.stateConnection()
+                    == ManagerConnectionState::Connected)
+            {
+                mapSnapshots.emplace(snpNode.strEndpointKey(), snpNode);
+                m_setParticipantEndpoints.insert(snpNode.strEndpointKey());
+            }
+        }
+
+        if (setSelectedSenderEndpoints.isEmpty())
+        {
+            throw std::invalid_argument("Select at least one connected Sender");
+        }
+        if (m_setParticipantEndpoints.size() < 2)
+        {
+            throw std::invalid_argument(
+                "File authentication requires at least two connected nodes"
+            );
+        }
+
+        const std::uint64_t u64OriginalByteCount =
+            static_cast<std::uint64_t>(cfgRound.ptrFileBytes()->size());
+        const std::uint32_t u32PacketCount = static_cast<std::uint32_t>(
+            (u64OriginalByteCount
+                + tesla::workload::FileWorkload::MESSAGE_SIZE - 1U)
+            / tesla::workload::FileWorkload::MESSAGE_SIZE
+        );
+        std::optional<tesla::core::ImprovedTeslaParameters>
+            optImprovedCore;
+        if (cfgRound.optImprovedParameters().has_value())
+        {
+            optImprovedCore.emplace(
+                cfgRound.optImprovedParameters()->u32GroupSize(),
+                cfgRound.optImprovedParameters()->u32DetectionThreshold()
+            );
+        }
+
+        const tesla::core::AuthenticationRoundParameters prmTemplate(
+            algCore(cfgRound.algCryptoAlgorithm()),
+            modeCore(cfgRound.modeAuthentication()),
+            u32PacketCount,
+            cfgRound.u32PacketsPerInterval(),
+            cfgRound.u32DisclosureDelay(),
+            cfgRound.u32IntervalMilliseconds(),
+            0,
+            optImprovedCore,
+            tesla::core::AuthenticationPayloadMode::File
+        );
+        m_u32IntervalMilliseconds = cfgRound.u32IntervalMilliseconds();
+        m_u32LastLogicalInterval = static_cast<std::uint32_t>(
+            prmTemplate.nDataIntervalCount()
+        ) + cfgRound.u32DisclosureDelay();
+        m_arrOriginalFileSha256 = cfgRound.arrOriginalSha256();
+        m_u64OriginalFileByteCount = u64OriginalByteCount;
+
+        for (const QString& strEndpointKey : setSelectedSenderEndpoints)
+        {
+            const auto itrSnapshot = mapSnapshots.find(strEndpointKey);
+            if (itrSnapshot == mapSnapshots.end())
+            {
+                throw std::invalid_argument(
+                    "Every selected Sender must remain connected"
+                );
+            }
+
+            tesla::core::SenderAuthenticationMaterial matMaterial =
+                m_autAuthority.matIssueSenderMaterial(
+                    itrSnapshot->second.strNodeName().toStdString(),
+                    prmTemplate
+                );
+            m_vecSenderTargets.push_back(SenderTarget{
+                strEndpointKey,
+                itrSnapshot->second.strIpAddress(),
+                std::move(matMaterial)
+            });
+        }
+
+        for (const SenderTarget& tgtSender : m_vecSenderTargets)
+        {
+            const tesla::core::SenderAuthenticationMaterial& matMaterial =
+                tgtSender.matMaterial;
+            const QString strSenderRequestId =
+                strCreateRequestId(QStringLiteral("sender-config"));
+            if (!bSendRequired(
+                    tgtSender.strEndpointKey,
+                    tesla::protocol::NodeControlMessage(
+                        tesla::protocol::SenderAuthenticationConfigControlDetails(
+                            strSenderRequestId.toStdString(),
+                            matMaterial.strSenderId(),
+                            matMaterial.u64ChainId(),
+                            arrBlock(matMaterial.vecChainSeed()),
+                            arrBlock(matMaterial.digCommitmentKey()),
+                            prmControlParameters(matMaterial.prmRoundParameters())
+                        )
+                    ),
+                    strSenderRequestId,
+                    strError
+                ))
+            {
+                resetPreparedRound();
+                return false;
+            }
+
+            const QString strFileRequestId =
+                strCreateRequestId(QStringLiteral("file-payload"));
+            m_setPendingConfigurationRequests.insert(strFileRequestId);
+            if (!m_ctlNetwork.bQueueFileUpload(
+                    tgtSender.strEndpointKey,
+                    strFileRequestId.toStdString(),
+                    matMaterial.u64ChainId(),
+                    cfgRound.ptrFileBytes()
+                ))
+            {
+                m_setPendingConfigurationRequests.remove(strFileRequestId);
+                strError = QStringLiteral("向节点 %1 上传文件失败")
+                    .arg(tgtSender.strEndpointKey);
+                resetPreparedRound();
+                return false;
+            }
+        }
+
+        for (const QString& strEndpointKey : m_setParticipantEndpoints)
+        {
+            std::vector<
+                tesla::protocol::ReceiverAuthenticationContextControlDetails
+            > vecReceiverContexts;
+            for (const SenderTarget& tgtSender : m_vecSenderTargets)
+            {
+                if (tgtSender.strEndpointKey == strEndpointKey)
+                {
+                    continue;
+                }
+
+                const tesla::core::SenderAuthenticationMaterial& matMaterial =
+                    tgtSender.matMaterial;
+                vecReceiverContexts.emplace_back(
+                    matMaterial.strSenderId(),
+                    tgtSender.strIpAddress.toStdString(),
+                    matMaterial.u64ChainId(),
+                    arrBlock(matMaterial.digCommitmentKey()),
+                    prmControlParameters(matMaterial.prmRoundParameters()),
+                    tesla::protocol::FileReceiverPayloadControlDetails(
+                        u64OriginalByteCount
+                    )
+                );
+            }
+
+            if (vecReceiverContexts.empty())
+            {
+                continue;
+            }
+
+            const QString strReceiverRequestId =
+                strCreateRequestId(QStringLiteral("receiver-config"));
+            if (!bSendRequired(
+                    strEndpointKey,
+                    tesla::protocol::NodeControlMessage(
+                        tesla::protocol::
+                            ReceiverAuthenticationContextsControlDetails(
+                                strReceiverRequestId.toStdString(),
+                                vecReceiverContexts
+                            )
+                    ),
+                    strReceiverRequestId,
+                    strError
+                ))
+            {
+                resetPreparedRound();
+                return false;
+            }
+            m_nExpectedResultCount += vecReceiverContexts.size();
+        }
+        m_nExpectedResultCount += m_vecSenderTargets.size();
+
+        emit configurationStateChanged(
+            false,
+            QStringLiteral("文件与配置已下发，等待 %1 个节点确认")
                 .arg(m_setPendingConfigurationRequests.size())
         );
         return true;
@@ -654,19 +979,113 @@ void ManagerAuthenticationController::processNodeControlJson(
             + QString::fromStdString(detResult.strSenderId()) + QStringLiteral("|")
             + QString::number(detResult.u64ChainId());
         m_setReceivedResultKeys.insert(strResultKey);
-        emit resultMessage(
-            QStringLiteral(
-                "%1 / chainId=%2：认证 %3/%4，失败 %5，缺失 %6，恢复文本“%7”；%8"
-            )
-                .arg(QString::fromStdString(detResult.strSenderId()))
-                .arg(detResult.u64ChainId())
-                .arg(detResult.u32AuthenticatedPacketCount())
-                .arg(detResult.u32ExpectedPacketCount())
-                .arg(detResult.u32FailedPacketCount())
-                .arg(detResult.u32MissingPacketCount())
-                .arg(QString::fromStdString(detResult.strRecoveredText()))
-                .arg(QString::fromStdString(detResult.strMessage()))
-        );
+        QString strPayloadStatus;
+        const bool bTextDetails = std::holds_alternative<
+            TextAuthenticationRoundResultDetails
+        >(detResult.varResultDetails());
+        const bool bFileSenderDetails = std::holds_alternative<
+            FileSenderAuthenticationRoundResultDetails
+        >(detResult.varResultDetails());
+        const bool bFileReceiverDetails = std::holds_alternative<
+            FileReceiverAuthenticationRoundResultDetails
+        >(detResult.varResultDetails());
+        const bool bExpectedDetails = m_bFileRound
+            ? (detResult.roleResult() == AuthenticationRoundResultRole::Sender
+                ? bFileSenderDetails
+                : bFileReceiverDetails)
+            : bTextDetails;
+        if (!bExpectedDetails)
+        {
+            strPayloadStatus = QStringLiteral(
+                "结果详情类型与本轮载荷模式不匹配"
+            );
+            if (m_bFileRound
+                && detResult.roleResult()
+                    == AuthenticationRoundResultRole::Receiver)
+            {
+                emit fileComparisonResult(
+                    QString::fromStdString(detResult.strSenderId()),
+                    detResult.u64ChainId(),
+                    m_u64OriginalFileByteCount,
+                    0,
+                    QString::fromLatin1(m_arrOriginalFileSha256.toHex()),
+                    QString(),
+                    false
+                );
+            }
+        }
+        else if (bTextDetails)
+        {
+            strPayloadStatus = QStringLiteral("恢复文本“%1”").arg(
+                QString::fromStdString(
+                    std::get<TextAuthenticationRoundResultDetails>(
+                        detResult.varResultDetails()
+                    ).strRecoveredText()
+                )
+            );
+        }
+        else if (bFileSenderDetails)
+        {
+            strPayloadStatus = QStringLiteral("Sender文件 %1B").arg(
+                std::get<FileSenderAuthenticationRoundResultDetails>(
+                    detResult.varResultDetails()
+                ).u64OriginalByteCount()
+            );
+        }
+        else
+        {
+            const FileReceiverAuthenticationRoundResultDetails& detFile =
+                std::get<FileReceiverAuthenticationRoundResultDetails>(
+                    detResult.varResultDetails()
+                );
+            const QString strOriginalHash = QString::fromLatin1(
+                m_arrOriginalFileSha256.toHex()
+            );
+            const QString strRecoveredHash =
+                detFile.optRecoveredSha256().has_value()
+                ? QString::fromStdString(
+                    AuthenticationControlValueCodec::strEncodeBlock(
+                        detFile.optRecoveredSha256().value()
+                    )
+                )
+                : QString();
+            const bool bMatches = detResult.statusResult()
+                    == AuthenticationRoundResultStatus::Completed
+                && detFile.u64OriginalByteCount()
+                    == m_u64OriginalFileByteCount
+                && detFile.u64RecoveredByteCount()
+                    == m_u64OriginalFileByteCount
+                && !strRecoveredHash.isEmpty()
+                && strRecoveredHash.compare(
+                    strOriginalHash,
+                    Qt::CaseInsensitive
+                ) == 0;
+            strPayloadStatus = QStringLiteral("恢复文件 %1/%2B，Hash %3")
+                .arg(detFile.u64RecoveredByteCount())
+                .arg(detFile.u64OriginalByteCount())
+                .arg(bMatches ? QStringLiteral("一致") : QStringLiteral("不一致"));
+            emit fileComparisonResult(
+                QString::fromStdString(detResult.strSenderId()),
+                detResult.u64ChainId(),
+                detFile.u64OriginalByteCount(),
+                detFile.u64RecoveredByteCount(),
+                strOriginalHash,
+                strRecoveredHash,
+                bMatches
+            );
+        }
+
+        emit resultMessage(QStringLiteral(
+            "%1 / chainId=%2：认证 %3/%4，失败 %5，缺失 %6，%7；%8"
+        )
+            .arg(QString::fromStdString(detResult.strSenderId()))
+            .arg(detResult.u64ChainId())
+            .arg(detResult.u32AuthenticatedPacketCount())
+            .arg(detResult.u32ExpectedPacketCount())
+            .arg(detResult.u32FailedPacketCount())
+            .arg(detResult.u32MissingPacketCount())
+            .arg(strPayloadStatus)
+            .arg(QString::fromStdString(detResult.strMessage())));
 
         if (m_bRoundRunning
             && m_setReceivedResultKeys.size()
@@ -678,6 +1097,41 @@ void ManagerAuthenticationController::processNodeControlJson(
             emit resultMessage(QStringLiteral(
                 "本轮所有Sender与Receiver结果均已返回"
             ));
+        }
+    }
+}
+
+void ManagerAuthenticationController::handleNodeStateChanged()
+{
+    if (m_setPendingConfigurationRequests.isEmpty()
+        || m_setParticipantEndpoints.isEmpty())
+    {
+        return;
+    }
+
+    QSet<QString> setConnectedEndpoints;
+    for (const ManagerNodeSnapshot& snpNode : m_ctlNetwork.vecNodeSnapshots())
+    {
+        if (snpNode.stateConnection() == ManagerConnectionState::Connected)
+        {
+            setConnectedEndpoints.insert(snpNode.strEndpointKey());
+        }
+    }
+
+    for (const QString& strEndpointKey : m_setParticipantEndpoints)
+    {
+        if (!setConnectedEndpoints.contains(strEndpointKey))
+        {
+            // 连接断开后不会再收到配置ACK，立即结束等待，避免界面永久卡住。
+            m_setPendingConfigurationRequests.clear();
+            m_bConfigurationRejected = true;
+            m_bConfigurationReady = false;
+            emit configurationStateChanged(
+                false,
+                QStringLiteral("参与节点 %1 已断开，本轮配置已取消")
+                    .arg(strEndpointKey)
+            );
+            return;
         }
     }
 }
@@ -781,7 +1235,10 @@ ManagerAuthenticationController::prmControlParameters(
         prmParameters.u64StartTimestampMilliseconds(),
         prmParameters.u32ChainLength(),
         std::move(optImprovedParameters),
-        tesla::protocol::AuthenticationPayloadMode::Text
+        prmParameters.modePayload()
+                == tesla::core::AuthenticationPayloadMode::Text
+            ? tesla::protocol::AuthenticationPayloadMode::Text
+            : tesla::protocol::AuthenticationPayloadMode::File
     );
 }
 
@@ -802,6 +1259,7 @@ void ManagerAuthenticationController::resetPreparedRound()
     m_bConfigurationRejected = false;
     m_bConfigurationReady = false;
     m_bRoundPaused = false;
+    m_bFileRound = false;
     m_strRoundId.clear();
     m_u32IntervalMilliseconds = 0;
     m_u32LastLogicalInterval = 0;
@@ -810,4 +1268,6 @@ void ManagerAuthenticationController::resetPreparedRound()
     m_u64TimelineStartTimestampMilliseconds = 0;
     m_u64PauseTimestampMilliseconds = 0;
     m_nExpectedResultCount = 0;
+    m_arrOriginalFileSha256.clear();
+    m_u64OriginalFileByteCount = 0;
 }

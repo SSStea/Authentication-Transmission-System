@@ -4,6 +4,7 @@
 #include "tesla/core/ReceiverAuthenticationContextStore.h"
 #include "tesla/protocol/NodeControlMessage.h"
 #include "tesla/protocol/ProtocolTypes.h"
+#include "tesla/workload/FileWorkload.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -28,12 +29,19 @@ public:
     )>;
     using TimeSynchronizationProvider =
         std::function<TimeSynchronizationStatus()>;
+    using RecoveredFileHandler = std::function<bool(
+        const std::string&,
+        const std::string&,
+        std::uint64_t,
+        const protocol::ByteBuffer&
+    )>;
 
     AuthenticationNodeRuntime(
         std::string strNodeName,
         DatagramSender fnDatagramSender,
         ControlEventHandler fnControlEventHandler,
-        TimeSynchronizationProvider fnTimeSynchronizationProvider
+        TimeSynchronizationProvider fnTimeSynchronizationProvider,
+        RecoveredFileHandler fnRecoveredFileHandler = {}
     );
     ~AuthenticationNodeRuntime();
 
@@ -43,6 +51,12 @@ public:
     protocol::NodeControlMessage msgHandleControl(
         protocol::TcpClientRole roleClient,
         const protocol::NodeControlMessage& msgMessage
+    );
+    protocol::NodeControlMessage msgApplyFilePayload(
+        protocol::TcpClientRole roleClient,
+        const std::string& strRequestId,
+        std::uint64_t u64ChainId,
+        workload::FileWorkload wrkFile
     );
 
     bool bHandleDatagram(

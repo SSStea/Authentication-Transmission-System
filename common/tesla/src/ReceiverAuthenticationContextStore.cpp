@@ -1,22 +1,61 @@
 #include "tesla/core/ReceiverAuthenticationContextStore.h"
 
+#include "tesla/workload/FileWorkload.h"
+
 #include <stdexcept>
 #include <utility>
 
 namespace tesla::core
 {
+TextReceiverPayloadDetails::TextReceiverPayloadDetails(
+    std::uint32_t u32RepeatCount
+)
+    : m_u32RepeatCount(u32RepeatCount)
+{
+    if (m_u32RepeatCount == 0)
+    {
+        throw std::invalid_argument("Text Receiver repeat count must be positive");
+    }
+}
+
+std::uint32_t TextReceiverPayloadDetails::u32RepeatCount() const noexcept
+{
+    return m_u32RepeatCount;
+}
+
+FileReceiverPayloadDetails::FileReceiverPayloadDetails(
+    std::uint64_t u64OriginalByteCount
+)
+    : m_u64OriginalByteCount(u64OriginalByteCount)
+{
+    if (m_u64OriginalByteCount == 0
+        || m_u64OriginalByteCount > workload::FileWorkload::MAXIMUM_FILE_SIZE)
+    {
+        throw std::invalid_argument(
+            "File Receiver byte count is outside the bounded range"
+        );
+    }
+}
+
+std::uint64_t FileReceiverPayloadDetails::u64OriginalByteCount() const noexcept
+{
+    return m_u64OriginalByteCount;
+}
+
 ReceiverAuthenticationContext::ReceiverAuthenticationContext(
     std::string strSenderId,
     std::string strSenderIpAddress,
     std::uint64_t u64ChainId,
     crypto::Digest digCommitmentKey,
-    AuthenticationRoundParameters prmRoundParameters
+    AuthenticationRoundParameters prmRoundParameters,
+    ReceiverPayloadDetails varPayloadDetails
 )
     : m_strSenderId(std::move(strSenderId)),
       m_strSenderIpAddress(std::move(strSenderIpAddress)),
       m_u64ChainId(u64ChainId),
       m_digCommitmentKey(std::move(digCommitmentKey)),
-      m_prmRoundParameters(std::move(prmRoundParameters))
+      m_prmRoundParameters(std::move(prmRoundParameters)),
+      m_varPayloadDetails(std::move(varPayloadDetails))
 {
     if (m_strSenderId.empty())
     {
@@ -33,6 +72,36 @@ ReceiverAuthenticationContext::ReceiverAuthenticationContext(
     if (m_u64ChainId == 0)
     {
         throw std::invalid_argument("Receiver context chain ID must not be zero");
+    }
+
+    if (std::holds_alternative<TextReceiverPayloadDetails>(m_varPayloadDetails))
+    {
+        const std::uint32_t u32RepeatCount = std::get<TextReceiverPayloadDetails>(
+            m_varPayloadDetails
+        ).u32RepeatCount();
+        if (m_prmRoundParameters.modePayload() != AuthenticationPayloadMode::Text
+            || u32RepeatCount != m_prmRoundParameters.u32TotalPacketCount())
+        {
+            throw std::invalid_argument(
+                "Text Receiver payload does not match its round parameters"
+            );
+        }
+    }
+    else
+    {
+        const std::uint64_t u64OriginalByteCount = std::get<
+            FileReceiverPayloadDetails
+        >(m_varPayloadDetails).u64OriginalByteCount();
+        const std::uint64_t u64PacketCount =
+            (u64OriginalByteCount + workload::FileWorkload::MESSAGE_SIZE - 1U)
+            / workload::FileWorkload::MESSAGE_SIZE;
+        if (m_prmRoundParameters.modePayload() != AuthenticationPayloadMode::File
+            || u64PacketCount != m_prmRoundParameters.u32TotalPacketCount())
+        {
+            throw std::invalid_argument(
+                "File Receiver payload does not match its round parameters"
+            );
+        }
     }
 }
 
@@ -62,6 +131,12 @@ const AuthenticationRoundParameters&
 ReceiverAuthenticationContext::prmRoundParameters() const noexcept
 {
     return m_prmRoundParameters;
+}
+
+const ReceiverPayloadDetails&
+ReceiverAuthenticationContext::varPayloadDetails() const noexcept
+{
+    return m_varPayloadDetails;
 }
 
 void ReceiverAuthenticationContextStore::replaceAll(

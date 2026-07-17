@@ -242,19 +242,55 @@ SenderAuthenticationConfigControlDetails::prmRoundParameters() const noexcept
     return m_prmRoundParameters;
 }
 
+TextReceiverPayloadControlDetails::TextReceiverPayloadControlDetails(
+    std::uint32_t u32RepeatCount
+)
+    : m_u32RepeatCount(u32RepeatCount)
+{
+    if (m_u32RepeatCount == 0)
+    {
+        throw std::invalid_argument("Text Receiver repeat count must be positive");
+    }
+}
+
+std::uint32_t
+TextReceiverPayloadControlDetails::u32RepeatCount() const noexcept
+{
+    return m_u32RepeatCount;
+}
+
+FileReceiverPayloadControlDetails::FileReceiverPayloadControlDetails(
+    std::uint64_t u64OriginalByteCount
+)
+    : m_u64OriginalByteCount(u64OriginalByteCount)
+{
+    if (m_u64OriginalByteCount == 0)
+    {
+        throw std::invalid_argument("File Receiver byte count must be positive");
+    }
+}
+
+std::uint64_t
+FileReceiverPayloadControlDetails::u64OriginalByteCount() const noexcept
+{
+    return m_u64OriginalByteCount;
+}
+
 ReceiverAuthenticationContextControlDetails::
 ReceiverAuthenticationContextControlDetails(
     std::string strSenderId,
     std::string strSenderIpAddress,
     std::uint64_t u64ChainId,
     BinaryBlock arrCommitmentKey,
-    AuthenticationRoundControlParameters prmRoundParameters
+    AuthenticationRoundControlParameters prmRoundParameters,
+    ReceiverPayloadControlDetails varPayloadDetails
 )
     : m_strSenderId(std::move(strSenderId)),
       m_strSenderIpAddress(std::move(strSenderIpAddress)),
       m_u64ChainId(u64ChainId),
       m_arrCommitmentKey(std::move(arrCommitmentKey)),
-      m_prmRoundParameters(std::move(prmRoundParameters))
+      m_prmRoundParameters(std::move(prmRoundParameters)),
+      m_varPayloadDetails(std::move(varPayloadDetails))
 {
     validateText(m_strSenderId, "Receiver context sender ID");
     validateText(m_strSenderIpAddress, "Receiver context sender IP");
@@ -262,6 +298,38 @@ ReceiverAuthenticationContextControlDetails(
     if (m_u64ChainId == 0)
     {
         throw std::invalid_argument("Receiver authentication chain ID must not be zero");
+    }
+
+    if (std::holds_alternative<TextReceiverPayloadControlDetails>(
+            m_varPayloadDetails
+        ))
+    {
+        const std::uint32_t u32RepeatCount = std::get<
+            TextReceiverPayloadControlDetails
+        >(m_varPayloadDetails).u32RepeatCount();
+        if (m_prmRoundParameters.modePayload() != AuthenticationPayloadMode::Text
+            || u32RepeatCount != m_prmRoundParameters.u32TotalPacketCount())
+        {
+            throw std::invalid_argument(
+                "Text Receiver payload details do not match round parameters"
+            );
+        }
+    }
+    else
+    {
+        const std::uint64_t u64OriginalByteCount = std::get<
+            FileReceiverPayloadControlDetails
+        >(m_varPayloadDetails).u64OriginalByteCount();
+        const std::uint64_t u64PacketCount =
+            (u64OriginalByteCount + BINARY_BLOCK_SIZE - 1U)
+            / BINARY_BLOCK_SIZE;
+        if (m_prmRoundParameters.modePayload() != AuthenticationPayloadMode::File
+            || u64PacketCount != m_prmRoundParameters.u32TotalPacketCount())
+        {
+            throw std::invalid_argument(
+                "File Receiver payload details do not match round parameters"
+            );
+        }
     }
 }
 
@@ -293,6 +361,12 @@ const AuthenticationRoundControlParameters&
 ReceiverAuthenticationContextControlDetails::prmRoundParameters() const noexcept
 {
     return m_prmRoundParameters;
+}
+
+const ReceiverPayloadControlDetails&
+ReceiverAuthenticationContextControlDetails::varPayloadDetails() const noexcept
+{
+    return m_varPayloadDetails;
 }
 
 ReceiverAuthenticationContextsControlDetails::
@@ -420,6 +494,78 @@ std::uint64_t TextPayloadControlDetails::u64ChainId() const noexcept
 const std::string& TextPayloadControlDetails::strUtf8Text() const noexcept
 {
     return m_strUtf8Text;
+}
+
+FileUploadBeginControlDetails::FileUploadBeginControlDetails(
+    std::string strRequestId,
+    std::uint64_t u64ChainId,
+    std::uint64_t u64OriginalByteCount
+)
+    : m_strRequestId(std::move(strRequestId)),
+      m_u64ChainId(u64ChainId),
+      m_u64OriginalByteCount(u64OriginalByteCount)
+{
+    validateText(m_strRequestId, "Control request ID");
+    if (m_u64ChainId == 0 || m_u64OriginalByteCount == 0)
+    {
+        throw std::invalid_argument("File upload begin identity or size is invalid");
+    }
+}
+
+const std::string& FileUploadBeginControlDetails::strRequestId() const noexcept
+{
+    return m_strRequestId;
+}
+
+std::uint64_t FileUploadBeginControlDetails::u64ChainId() const noexcept
+{
+    return m_u64ChainId;
+}
+
+std::uint64_t
+FileUploadBeginControlDetails::u64OriginalByteCount() const noexcept
+{
+    return m_u64OriginalByteCount;
+}
+
+FileUploadEndControlDetails::FileUploadEndControlDetails(
+    std::string strRequestId,
+    std::uint64_t u64ChainId,
+    std::uint32_t u32ChunkCount,
+    std::uint64_t u64TransferredByteCount
+)
+    : m_strRequestId(std::move(strRequestId)),
+      m_u64ChainId(u64ChainId),
+      m_u32ChunkCount(u32ChunkCount),
+      m_u64TransferredByteCount(u64TransferredByteCount)
+{
+    validateText(m_strRequestId, "Control request ID");
+    if (m_u64ChainId == 0 || m_u32ChunkCount == 0
+        || m_u64TransferredByteCount == 0)
+    {
+        throw std::invalid_argument("File upload end counts are invalid");
+    }
+}
+
+const std::string& FileUploadEndControlDetails::strRequestId() const noexcept
+{
+    return m_strRequestId;
+}
+
+std::uint64_t FileUploadEndControlDetails::u64ChainId() const noexcept
+{
+    return m_u64ChainId;
+}
+
+std::uint32_t FileUploadEndControlDetails::u32ChunkCount() const noexcept
+{
+    return m_u32ChunkCount;
+}
+
+std::uint64_t
+FileUploadEndControlDetails::u64TransferredByteCount() const noexcept
+{
+    return m_u64TransferredByteCount;
 }
 
 AuthenticationRoundCommandControlDetails::
@@ -561,6 +707,74 @@ AuthenticationRoundAcknowledgementControlDetails::strMessage() const noexcept
     return m_strMessage;
 }
 
+TextAuthenticationRoundResultDetails::TextAuthenticationRoundResultDetails(
+    std::string strRecoveredText
+)
+    : m_strRecoveredText(std::move(strRecoveredText))
+{
+    validateText(m_strRecoveredText, "Recovered text", true);
+}
+
+const std::string&
+TextAuthenticationRoundResultDetails::strRecoveredText() const noexcept
+{
+    return m_strRecoveredText;
+}
+
+FileSenderAuthenticationRoundResultDetails::
+FileSenderAuthenticationRoundResultDetails(
+    std::uint64_t u64OriginalByteCount
+)
+    : m_u64OriginalByteCount(u64OriginalByteCount)
+{
+    if (m_u64OriginalByteCount == 0)
+    {
+        throw std::invalid_argument("File Sender result size must be positive");
+    }
+}
+
+std::uint64_t
+FileSenderAuthenticationRoundResultDetails::u64OriginalByteCount() const noexcept
+{
+    return m_u64OriginalByteCount;
+}
+
+FileReceiverAuthenticationRoundResultDetails::
+FileReceiverAuthenticationRoundResultDetails(
+    std::uint64_t u64OriginalByteCount,
+    std::uint64_t u64RecoveredByteCount,
+    std::optional<BinaryBlock> optRecoveredSha256
+)
+    : m_u64OriginalByteCount(u64OriginalByteCount),
+      m_u64RecoveredByteCount(u64RecoveredByteCount),
+      m_optRecoveredSha256(std::move(optRecoveredSha256))
+{
+    if (m_u64OriginalByteCount == 0
+        || (m_u64RecoveredByteCount == 0 && m_optRecoveredSha256.has_value())
+        || (m_u64RecoveredByteCount != 0 && !m_optRecoveredSha256.has_value()))
+    {
+        throw std::invalid_argument("File Receiver result details are inconsistent");
+    }
+}
+
+std::uint64_t
+FileReceiverAuthenticationRoundResultDetails::u64OriginalByteCount() const noexcept
+{
+    return m_u64OriginalByteCount;
+}
+
+std::uint64_t
+FileReceiverAuthenticationRoundResultDetails::u64RecoveredByteCount() const noexcept
+{
+    return m_u64RecoveredByteCount;
+}
+
+const std::optional<BinaryBlock>&
+FileReceiverAuthenticationRoundResultDetails::optRecoveredSha256() const noexcept
+{
+    return m_optRecoveredSha256;
+}
+
 AuthenticationRoundResultControlDetails::
 AuthenticationRoundResultControlDetails(
     std::string strRoundId,
@@ -573,7 +787,7 @@ AuthenticationRoundResultControlDetails(
     std::uint32_t u32AuthenticatedPacketCount,
     std::uint32_t u32FailedPacketCount,
     std::uint32_t u32MissingPacketCount,
-    std::string strRecoveredText,
+    AuthenticationRoundResultDetails varResultDetails,
     std::string strMessage
 )
     : m_strRoundId(std::move(strRoundId)),
@@ -586,12 +800,11 @@ AuthenticationRoundResultControlDetails(
       m_u32AuthenticatedPacketCount(u32AuthenticatedPacketCount),
       m_u32FailedPacketCount(u32FailedPacketCount),
       m_u32MissingPacketCount(u32MissingPacketCount),
-      m_strRecoveredText(std::move(strRecoveredText)),
+      m_varResultDetails(std::move(varResultDetails)),
       m_strMessage(std::move(strMessage))
 {
     validateText(m_strRoundId, "Authentication round ID");
     validateText(m_strSenderId, "Authentication result sender ID");
-    validateText(m_strRecoveredText, "Recovered text", true);
     validateText(m_strMessage, "Authentication result message");
 
     if (m_u64ChainId == 0 || m_u32ExpectedPacketCount == 0)
@@ -605,6 +818,20 @@ AuthenticationRoundResultControlDetails(
         || m_u32MissingPacketCount > m_u32ExpectedPacketCount)
     {
         throw std::invalid_argument("Authentication round result counts are inconsistent");
+    }
+
+    if ((m_roleResult == AuthenticationRoundResultRole::Sender
+            && std::holds_alternative<
+                FileReceiverAuthenticationRoundResultDetails
+            >(m_varResultDetails))
+        || (m_roleResult == AuthenticationRoundResultRole::Receiver
+            && std::holds_alternative<
+                FileSenderAuthenticationRoundResultDetails
+            >(m_varResultDetails)))
+    {
+        throw std::invalid_argument(
+            "Authentication result role does not match its payload details"
+        );
     }
 }
 
@@ -667,10 +894,10 @@ AuthenticationRoundResultControlDetails::u32MissingPacketCount() const noexcept
     return m_u32MissingPacketCount;
 }
 
-const std::string&
-AuthenticationRoundResultControlDetails::strRecoveredText() const noexcept
+const AuthenticationRoundResultDetails&
+AuthenticationRoundResultControlDetails::varResultDetails() const noexcept
 {
-    return m_strRecoveredText;
+    return m_varResultDetails;
 }
 
 const std::string&

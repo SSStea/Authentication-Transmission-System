@@ -1,5 +1,6 @@
 #include "tesla/node_agent/TcpManagementServer.h"
 
+#include "tesla/core/FileUploadSession.h"
 #include "tesla/protocol/NodeControlJsonCodec.h"
 #include "tesla/protocol/TcpFrame.h"
 
@@ -109,6 +110,11 @@ public:
         return m_mtxSend;
     }
 
+    core::FileUploadSession& uplFile() noexcept
+    {
+        return m_uplFile;
+    }
+
 private:
     std::atomic<int> m_nSocket;
     std::atomic<bool> m_bHelloReceived{false};
@@ -116,6 +122,7 @@ private:
         static_cast<int>(protocol::TcpClientRole::Monitor)
     };
     std::mutex        m_mtxSend;
+    core::FileUploadSession m_uplFile;
 };
 
 TcpManagementServer::TcpManagementServer(
@@ -123,13 +130,15 @@ TcpManagementServer::TcpManagementServer(
     std::uint16_t u16Port,
     std::string strNodeName,
     RuntimeStateProvider fnStateProvider,
-    ControlMessageHandler fnControlMessageHandler
+    ControlMessageHandler fnControlMessageHandler,
+    FilePayloadHandler fnFilePayloadHandler
 )
     : m_strBindAddress(std::move(strBindAddress)),
       m_u16Port(u16Port),
       m_strNodeName(std::move(strNodeName)),
       m_fnStateProvider(std::move(fnStateProvider)),
-      m_fnControlMessageHandler(std::move(fnControlMessageHandler))
+      m_fnControlMessageHandler(std::move(fnControlMessageHandler)),
+      m_fnFilePayloadHandler(std::move(fnFilePayloadHandler))
 {
     if (!m_fnStateProvider)
     {
@@ -140,6 +149,13 @@ TcpManagementServer::TcpManagementServer(
     {
         throw std::invalid_argument(
             "TCP management server requires a control message handler"
+        );
+    }
+
+    if (!m_fnFilePayloadHandler)
+    {
+        throw std::invalid_argument(
+            "TCP management server requires a file payload handler"
         );
     }
 }
@@ -422,17 +438,37 @@ bool TcpManagementServer::bHandleFrame(
             return false;
         }
 
-        const std::string strErrorCode = roleClient == protocol::TcpClientRole::Monitor
-            ? "MONITOR_FILE_FORBIDDEN"
-            : "FILE_HANDLER_NOT_READY";
-        return bSendControlMessage(
-            ptrClient,
-            protocol::NodeControlMessage(protocol::ErrorResponseControlDetails(
-                "",
-                strErrorCode,
-                "Binary file chunks are not handled in phase 3"
-            ))
-        );
+        if (roleClient == protocol::TcpClientRole::Monitor)
+        {
+            return bSendControlMessage(
+                ptrClient,
+                protocol::NodeControlMessage(protocol::ErrorResponseControlDetails(
+                    "",
+                    "MONITOR_FILE_FORBIDDEN",
+                    "Monitor clients cannot upload binary file chunks"
+                ))
+            );
+        }
+
+        try
+        {
+            ptrClient->uplFile().append(std::get<protocol::FileBinaryChunk>(
+                frmFrame.varPayload()
+            ));
+            return true;
+        }
+        catch (const std::exception& exError)
+        {
+            ptrClient->uplFile().reset();
+            return bSendControlMessage(
+                ptrClient,
+                protocol::NodeControlMessage(protocol::ErrorResponseControlDetails(
+                    "",
+                    "INVALID_FILE_UPLOAD",
+                    exError.what()
+                ))
+            );
+        }
     }
 
     const std::string& strJson = std::get<protocol::JsonControlFramePayload>(
@@ -477,6 +513,97 @@ bool TcpManagementServer::bHandleFrame(
         bHelloReceived = true;
         ptrClient->setRole(roleClient);
         return true;
+    }
+
+    if (msgMessage.typeMessage()
+        == protocol::NodeControlMessageType::FileUploadBegin)
+    {
+        const protocol::FileUploadBeginControlDetails& detUpload = std::get<
+            protocol::FileUploadBeginControlDetails
+        >(msgMessage.varDetails());
+        if (roleClient == protocol::TcpClientRole::Monitor)
+        {
+            return bSendControlMessage(
+                ptrClient,
+                protocol::NodeControlMessage(
+                    protocol::AuthenticationConfigAcknowledgementControlDetails(
+                        detUpload.strRequestId(),
+                        protocol::AuthenticationConfigTarget::FilePayload,
+                        false,
+                        "MONITOR_FILE_FORBIDDEN",
+                        "Monitor clients cannot begin a file upload"
+                    )
+                )
+            );
+        }
+
+        try
+        {
+            ptrClient->uplFile().begin(
+                detUpload.strRequestId(),
+                detUpload.u64ChainId(),
+                detUpload.u64OriginalByteCount()
+            );
+            return true;
+        }
+        catch (const std::exception& exError)
+        {
+            ptrClient->uplFile().reset();
+            return bSendControlMessage(
+                ptrClient,
+                protocol::NodeControlMessage(
+                    protocol::AuthenticationConfigAcknowledgementControlDetails(
+                        detUpload.strRequestId(),
+                        protocol::AuthenticationConfigTarget::FilePayload,
+                        false,
+                        "INVALID_FILE_UPLOAD",
+                        exError.what()
+                    )
+                )
+            );
+        }
+    }
+
+    if (msgMessage.typeMessage()
+        == protocol::NodeControlMessageType::FileUploadEnd)
+    {
+        const protocol::FileUploadEndControlDetails& detUpload = std::get<
+            protocol::FileUploadEndControlDetails
+        >(msgMessage.varDetails());
+        try
+        {
+            workload::FileWorkload wrkFile = ptrClient->uplFile().wrkComplete(
+                detUpload.strRequestId(),
+                detUpload.u64ChainId(),
+                detUpload.u32ChunkCount(),
+                detUpload.u64TransferredByteCount()
+            );
+            return bSendControlMessage(
+                ptrClient,
+                m_fnFilePayloadHandler(
+                    roleClient,
+                    detUpload.strRequestId(),
+                    detUpload.u64ChainId(),
+                    std::move(wrkFile)
+                )
+            );
+        }
+        catch (const std::exception& exError)
+        {
+            ptrClient->uplFile().reset();
+            return bSendControlMessage(
+                ptrClient,
+                protocol::NodeControlMessage(
+                    protocol::AuthenticationConfigAcknowledgementControlDetails(
+                        detUpload.strRequestId(),
+                        protocol::AuthenticationConfigTarget::FilePayload,
+                        false,
+                        "INVALID_FILE_UPLOAD",
+                        exError.what()
+                    )
+                )
+            );
+        }
     }
 
     if (msgMessage.typeMessage() == protocol::NodeControlMessageType::Ping)

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace tesla::protocol
@@ -23,7 +24,8 @@ enum class AuthenticationConfigTarget
 {
     Sender,
     Receiver,
-    TextPayload
+    TextPayload,
+    FilePayload
 };
 
 /** @brief 可信TCP认证上下文中的载荷类型，UDP报文不重复携带。 */
@@ -125,7 +127,38 @@ private:
     AuthenticationRoundControlParameters  m_prmRoundParameters;
 };
 
-/** @brief Receiver配置中的单个Sender公开上下文，不包含种子或完整密钥链。 */
+/** @brief 文本Receiver只需要预期的重复报文数量。 */
+class TextReceiverPayloadControlDetails final
+{
+public:
+    explicit TextReceiverPayloadControlDetails(std::uint32_t u32RepeatCount);
+
+    std::uint32_t u32RepeatCount() const noexcept;
+
+private:
+    std::uint32_t m_u32RepeatCount;
+};
+
+/** @brief 文件Receiver只接收恢复长度，不接收原始文件Hash。 */
+class FileReceiverPayloadControlDetails final
+{
+public:
+    explicit FileReceiverPayloadControlDetails(
+        std::uint64_t u64OriginalByteCount
+    );
+
+    std::uint64_t u64OriginalByteCount() const noexcept;
+
+private:
+    std::uint64_t m_u64OriginalByteCount;
+};
+
+using ReceiverPayloadControlDetails = std::variant<
+    TextReceiverPayloadControlDetails,
+    FileReceiverPayloadControlDetails
+>;
+
+/** @brief Receiver配置中的单个Sender公开上下文，不包含种子、原文件Hash或完整密钥链。 */
 class ReceiverAuthenticationContextControlDetails final
 {
 public:
@@ -134,7 +167,8 @@ public:
         std::string strSenderIpAddress,
         std::uint64_t u64ChainId,
         BinaryBlock arrCommitmentKey,
-        AuthenticationRoundControlParameters prmRoundParameters
+        AuthenticationRoundControlParameters prmRoundParameters,
+        ReceiverPayloadControlDetails varPayloadDetails
     );
 
     const std::string& strSenderId() const noexcept;
@@ -142,6 +176,7 @@ public:
     std::uint64_t u64ChainId() const noexcept;
     const BinaryBlock& arrCommitmentKey() const noexcept;
     const AuthenticationRoundControlParameters& prmRoundParameters() const noexcept;
+    const ReceiverPayloadControlDetails& varPayloadDetails() const noexcept;
 
 private:
     std::string                           m_strSenderId;
@@ -149,6 +184,7 @@ private:
     std::uint64_t                         m_u64ChainId;
     BinaryBlock                           m_arrCommitmentKey;
     AuthenticationRoundControlParameters  m_prmRoundParameters;
+    ReceiverPayloadControlDetails         m_varPayloadDetails;
 };
 
 /** @brief 一次性替换Receiver全部可信Sender上下文的控制消息。 */
@@ -213,6 +249,49 @@ private:
     std::string   m_strRequestId;
     std::uint64_t m_u64ChainId;
     std::string   m_strUtf8Text;
+};
+
+/** @brief 文件二进制帧之前的可信元数据，只声明本轮chainId和文件长度。 */
+class FileUploadBeginControlDetails final
+{
+public:
+    FileUploadBeginControlDetails(
+        std::string strRequestId,
+        std::uint64_t u64ChainId,
+        std::uint64_t u64OriginalByteCount
+    );
+
+    const std::string& strRequestId() const noexcept;
+    std::uint64_t u64ChainId() const noexcept;
+    std::uint64_t u64OriginalByteCount() const noexcept;
+
+private:
+    std::string   m_strRequestId;
+    std::uint64_t m_u64ChainId;
+    std::uint64_t m_u64OriginalByteCount;
+};
+
+/** @brief 文件二进制帧之后的事务结束标记，用于核对分块数和完整长度。 */
+class FileUploadEndControlDetails final
+{
+public:
+    FileUploadEndControlDetails(
+        std::string strRequestId,
+        std::uint64_t u64ChainId,
+        std::uint32_t u32ChunkCount,
+        std::uint64_t u64TransferredByteCount
+    );
+
+    const std::string& strRequestId() const noexcept;
+    std::uint64_t u64ChainId() const noexcept;
+    std::uint32_t u32ChunkCount() const noexcept;
+    std::uint64_t u64TransferredByteCount() const noexcept;
+
+private:
+    std::string   m_strRequestId;
+    std::uint64_t m_u64ChainId;
+    std::uint32_t m_u32ChunkCount;
+    std::uint64_t m_u64TransferredByteCount;
 };
 
 enum class AuthenticationRoundCommand
@@ -300,7 +379,56 @@ enum class AuthenticationRoundResultStatus
     TimeUnsynchronized
 };
 
-/** @brief Sender或Receiver通过原TCP连接上报的一轮阶段6最终结果。 */
+class TextAuthenticationRoundResultDetails final
+{
+public:
+    explicit TextAuthenticationRoundResultDetails(std::string strRecoveredText);
+
+    const std::string& strRecoveredText() const noexcept;
+
+private:
+    std::string m_strRecoveredText;
+};
+
+class FileSenderAuthenticationRoundResultDetails final
+{
+public:
+    explicit FileSenderAuthenticationRoundResultDetails(
+        std::uint64_t u64OriginalByteCount
+    );
+
+    std::uint64_t u64OriginalByteCount() const noexcept;
+
+private:
+    std::uint64_t m_u64OriginalByteCount;
+};
+
+class FileReceiverAuthenticationRoundResultDetails final
+{
+public:
+    FileReceiverAuthenticationRoundResultDetails(
+        std::uint64_t u64OriginalByteCount,
+        std::uint64_t u64RecoveredByteCount,
+        std::optional<BinaryBlock> optRecoveredSha256
+    );
+
+    std::uint64_t u64OriginalByteCount() const noexcept;
+    std::uint64_t u64RecoveredByteCount() const noexcept;
+    const std::optional<BinaryBlock>& optRecoveredSha256() const noexcept;
+
+private:
+    std::uint64_t              m_u64OriginalByteCount;
+    std::uint64_t              m_u64RecoveredByteCount;
+    std::optional<BinaryBlock> m_optRecoveredSha256;
+};
+
+using AuthenticationRoundResultDetails = std::variant<
+    TextAuthenticationRoundResultDetails,
+    FileSenderAuthenticationRoundResultDetails,
+    FileReceiverAuthenticationRoundResultDetails
+>;
+
+/** @brief Sender或Receiver通过原TCP连接上报的统一结果和模式专用详情。 */
 class AuthenticationRoundResultControlDetails final
 {
 public:
@@ -315,7 +443,7 @@ public:
         std::uint32_t u32AuthenticatedPacketCount,
         std::uint32_t u32FailedPacketCount,
         std::uint32_t u32MissingPacketCount,
-        std::string strRecoveredText,
+        AuthenticationRoundResultDetails varResultDetails,
         std::string strMessage
     );
 
@@ -329,7 +457,7 @@ public:
     std::uint32_t u32AuthenticatedPacketCount() const noexcept;
     std::uint32_t u32FailedPacketCount() const noexcept;
     std::uint32_t u32MissingPacketCount() const noexcept;
-    const std::string& strRecoveredText() const noexcept;
+    const AuthenticationRoundResultDetails& varResultDetails() const noexcept;
     const std::string& strMessage() const noexcept;
 
 private:
@@ -343,7 +471,7 @@ private:
     std::uint32_t                   m_u32AuthenticatedPacketCount;
     std::uint32_t                   m_u32FailedPacketCount;
     std::uint32_t                   m_u32MissingPacketCount;
-    std::string                     m_strRecoveredText;
+    AuthenticationRoundResultDetails m_varResultDetails;
     std::string                     m_strMessage;
 };
 

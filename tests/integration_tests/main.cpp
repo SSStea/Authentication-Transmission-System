@@ -259,7 +259,10 @@ ReceiverAuthenticationContextControlDetails detCreateReceiverContext(
         strSenderIpAddress,
         matMaterial.u64ChainId(),
         arrFromDigest(matMaterial.digCommitmentKey()),
-        prmCreateControlRound(matMaterial.prmRoundParameters())
+        prmCreateControlRound(matMaterial.prmRoundParameters()),
+        TextReceiverPayloadControlDetails(
+            matMaterial.prmRoundParameters().u32TotalPacketCount()
+        )
     );
 }
 

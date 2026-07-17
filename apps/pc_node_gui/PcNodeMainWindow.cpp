@@ -34,6 +34,7 @@ PcNodeMainWindow::PcNodeMainWindow(
       m_pUdpValue(nullptr),
       m_pSenderValue(nullptr),
       m_pReceiverValue(nullptr),
+      m_pFileStatusEdit(nullptr),
       m_pLogEdit(nullptr)
 {
     setWindowTitle(QStringLiteral("TESLA PC广播节点"));
@@ -85,13 +86,7 @@ PcNodeMainWindow::PcNodeMainWindow(
         ),
         QStringLiteral("矩阵")
     );
-    pTabs->addTab(
-        pCreatePlaceholderPage(
-            QStringLiteral("文件状态"),
-            QStringLiteral("阶段7接入文件分片、恢复大小和SHA-256结果。")
-        ),
-        QStringLiteral("文件")
-    );
+    pTabs->addTab(pCreateFileStatusPage(), QStringLiteral("文件"));
     pTabs->addTab(pCreateLogPage(), QStringLiteral("日志"));
     pLayout->addWidget(pTabs, 1);
     setCentralWidget(pCentralWidget);
@@ -108,6 +103,12 @@ PcNodeMainWindow::PcNodeMainWindow(
         &PcNodeNetworkController::logMessage,
         this,
         &PcNodeMainWindow::appendLog
+    );
+    connect(
+        &m_ctlNetwork,
+        &PcNodeNetworkController::fileStatusMessage,
+        this,
+        &PcNodeMainWindow::appendFileStatus
     );
 
     if (!m_ctlNetwork.bStart())
@@ -142,8 +143,8 @@ QWidget* PcNodeMainWindow::pCreateStatusPage()
 
     QLabel* pHintLabel = new QLabel(
         QStringLiteral(
-            "阶段6已接入文本认证配置、原生/改进TESLA UDP收发以及"
-            "开始、暂停、继续和停止控制；文件载荷将在阶段7接入。"
+            "已接入文本与文件认证配置、原生/改进TESLA UDP收发、"
+            "文件后台切片、认证恢复及原子落盘。"
         ),
         pPage
     );
@@ -181,6 +182,35 @@ QWidget* PcNodeMainWindow::pCreateLogPage()
     m_pLogEdit->setPlaceholderText(QStringLiteral("真实网络状态日志将在此显示"));
     pLayout->addWidget(m_pLogEdit);
     return pPage;
+}
+
+QWidget* PcNodeMainWindow::pCreateFileStatusPage()
+{
+    QWidget* pPage = new QWidget(this);
+    QVBoxLayout* pLayout = new QVBoxLayout(pPage);
+    QLabel* pHintLabel = new QLabel(
+        QStringLiteral(
+            "这里显示TCP上传完成、Sender 32B切片和Receiver恢复Hash状态。"
+            "认证成功的恢复文件使用原子写入保存到应用数据目录。"
+        ),
+        pPage
+    );
+    pHintLabel->setWordWrap(true);
+    pHintLabel->setObjectName(QStringLiteral("hintLabel"));
+    m_pFileStatusEdit = new QTextEdit(pPage);
+    m_pFileStatusEdit->setReadOnly(true);
+    m_pFileStatusEdit->setPlaceholderText(QStringLiteral("尚无文件认证事件"));
+    pLayout->addWidget(pHintLabel);
+    pLayout->addWidget(m_pFileStatusEdit, 1);
+    return pPage;
+}
+
+void PcNodeMainWindow::appendFileStatus(const QString& strMessage)
+{
+    m_pFileStatusEdit->append(
+        QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz "))
+        + strMessage
+    );
 }
 
 void PcNodeMainWindow::refreshStatus()

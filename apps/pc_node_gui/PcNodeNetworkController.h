@@ -52,6 +52,8 @@ public:
 signals:
     void stateChanged();
     void logMessage(const QString& strMessage);
+    /** @brief 文件上传、Sender切片或Receiver恢复状态，供文件页单独展示。 */
+    void fileStatusMessage(const QString& strMessage);
 
 private:
     struct ClientState;

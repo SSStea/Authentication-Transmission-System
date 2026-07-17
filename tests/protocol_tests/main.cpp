@@ -268,7 +268,8 @@ bool bTestAuthenticationControlJson()
                     "127.0.0.31",
                     u64LargeChainId,
                     arrCreateBlock(0x80),
-                    prmRound
+                    prmRound,
+                    TextReceiverPayloadControlDetails(10)
                 )
             }
         )
@@ -352,7 +353,7 @@ bool bTestAuthenticationControlJson()
             10,
             0,
             0,
-            "helloworld",
+            TextAuthenticationRoundResultDetails("helloworld"),
             "completed"
         )
     );

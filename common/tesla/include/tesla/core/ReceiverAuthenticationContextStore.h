@@ -14,6 +14,35 @@
 
 namespace tesla::core
 {
+/** @brief 文本Receiver公开上下文中的预期重复次数。 */
+class TextReceiverPayloadDetails final
+{
+public:
+    explicit TextReceiverPayloadDetails(std::uint32_t u32RepeatCount);
+
+    std::uint32_t u32RepeatCount() const noexcept;
+
+private:
+    std::uint32_t m_u32RepeatCount;
+};
+
+/** @brief 文件Receiver公开上下文中的原始长度，不包含原文件Hash。 */
+class FileReceiverPayloadDetails final
+{
+public:
+    explicit FileReceiverPayloadDetails(std::uint64_t u64OriginalByteCount);
+
+    std::uint64_t u64OriginalByteCount() const noexcept;
+
+private:
+    std::uint64_t m_u64OriginalByteCount;
+};
+
+using ReceiverPayloadDetails = std::variant<
+    TextReceiverPayloadDetails,
+    FileReceiverPayloadDetails
+>;
+
 /**
  * @brief 保存Receiver验证某个Sender密钥链所需的公开上下文。
  *
@@ -27,7 +56,8 @@ public:
         std::string strSenderIpAddress,
         std::uint64_t u64ChainId,
         crypto::Digest digCommitmentKey,
-        AuthenticationRoundParameters prmRoundParameters
+        AuthenticationRoundParameters prmRoundParameters,
+        ReceiverPayloadDetails varPayloadDetails
     );
 
     const std::string& strSenderId() const noexcept;
@@ -35,6 +65,7 @@ public:
     std::uint64_t u64ChainId() const noexcept;
     const crypto::Digest& digCommitmentKey() const noexcept;
     const AuthenticationRoundParameters& prmRoundParameters() const noexcept;
+    const ReceiverPayloadDetails& varPayloadDetails() const noexcept;
 
 private:
     std::string                    m_strSenderId;
@@ -42,6 +73,7 @@ private:
     std::uint64_t                  m_u64ChainId;
     crypto::Digest                 m_digCommitmentKey;
     AuthenticationRoundParameters  m_prmRoundParameters;
+    ReceiverPayloadDetails         m_varPayloadDetails;
 };
 
 enum class ReceiverAuthenticationContextLookupError

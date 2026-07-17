@@ -49,6 +49,7 @@ UavMonitorMainWindow::UavMonitorMainWindow(
       m_pSenderValue(nullptr),
       m_pReceiverValue(nullptr),
       m_pResponseValue(nullptr),
+      m_pFileStatusEdit(nullptr),
       m_pLogEdit(nullptr)
 {
     setWindowTitle(QStringLiteral("TESLA 无人机广播节点监控"));
@@ -96,13 +97,7 @@ UavMonitorMainWindow::UavMonitorMainWindow(
         ),
         QStringLiteral("估算能耗")
     );
-    pTabs->addTab(
-        pCreatePlaceholderPage(
-            QStringLiteral("文件状态"),
-            QStringLiteral("阶段7显示分片接收、认证、重组和Hash结果。")
-        ),
-        QStringLiteral("文件")
-    );
+    pTabs->addTab(pCreateFileStatusPage(), QStringLiteral("文件"));
     pTabs->addTab(pCreateLogPage(), QStringLiteral("日志"));
     pLayout->addWidget(pTabs, 1);
     setCentralWidget(pCentralWidget);
@@ -121,6 +116,12 @@ UavMonitorMainWindow::UavMonitorMainWindow(
         &UavMonitorNetworkController::logMessage,
         this,
         &UavMonitorMainWindow::appendLog
+    );
+    connect(
+        &m_ctlNetwork,
+        &UavMonitorNetworkController::fileStatusMessage,
+        this,
+        &UavMonitorMainWindow::appendFileStatus
     );
     refreshStatus();
 }
@@ -232,6 +233,35 @@ QWidget* UavMonitorMainWindow::pCreateLogPage()
     m_pLogEdit->setPlaceholderText(QStringLiteral("真实MONITOR连接日志将在此显示"));
     pLayout->addWidget(m_pLogEdit);
     return pPage;
+}
+
+QWidget* UavMonitorMainWindow::pCreateFileStatusPage()
+{
+    QWidget* pPage = new QWidget(this);
+    QVBoxLayout* pLayout = new QVBoxLayout(pPage);
+    QLabel* pHintLabel = new QLabel(
+        QStringLiteral(
+            "MONITOR只读取节点上报的文件发送或恢复结果，"
+            "不会接收原始文件、原始Hash或修改认证状态。"
+        ),
+        pPage
+    );
+    pHintLabel->setWordWrap(true);
+    pHintLabel->setObjectName(QStringLiteral("hintLabel"));
+    m_pFileStatusEdit = new QTextEdit(pPage);
+    m_pFileStatusEdit->setReadOnly(true);
+    m_pFileStatusEdit->setPlaceholderText(QStringLiteral("尚无文件认证结果"));
+    pLayout->addWidget(pHintLabel);
+    pLayout->addWidget(m_pFileStatusEdit, 1);
+    return pPage;
+}
+
+void UavMonitorMainWindow::appendFileStatus(const QString& strMessage)
+{
+    m_pFileStatusEdit->append(
+        QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz "))
+        + strMessage
+    );
 }
 
 void UavMonitorMainWindow::refreshStatus()

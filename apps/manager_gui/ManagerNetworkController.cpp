@@ -1,8 +1,10 @@
 #include "ManagerNetworkController.h"
 
+#include "tesla/core/FileUploadSession.h"
 #include "tesla/protocol/AttackControl.h"
 #include "tesla/protocol/NodeControlJsonCodec.h"
 #include "tesla/protocol/TcpFrame.h"
+#include "tesla/workload/FileWorkload.h"
 
 #include <QAbstractSocket>
 #include <QDateTime>
@@ -17,12 +19,19 @@
 #include <QUuid>
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 #include <variant>
 
 namespace
 {
 using namespace tesla::protocol;
+
+constexpr qsizetype FILE_UPLOAD_CHUNK_SIZE = static_cast<qsizetype>(
+    tesla::core::FileUploadSession::MAXIMUM_CHUNK_SIZE
+);
+constexpr qint64 MAXIMUM_FILE_UPLOAD_SOCKET_BACKLOG = 256 * 1024;
+constexpr qint64 FILE_UPLOAD_END_FRAME_RESERVE = 4096;
 
 QString strRoleName(NodeRole roleNode)
 {
@@ -144,6 +153,15 @@ bool bSendJsonFrame(QTcpSocket* pSocket, const std::string& strJson)
 
 struct ManagerNetworkController::EndpointState final
 {
+    struct FileUploadState final
+    {
+        std::string                      strRequestId;
+        std::uint64_t                    u64ChainId = 0;
+        std::shared_ptr<const QByteArray> ptrFileBytes;
+        qsizetype                        nOffset = 0;
+        std::uint32_t                    u32NextChunkIndex = 1;
+    };
+
     QString                strKey;
     QString                strNodeName;
     QString                strIpAddress;
@@ -158,6 +176,7 @@ struct ManagerNetworkController::EndpointState final
     int                    nAddressScore = -10000;
     QTcpSocket*            pSocket = nullptr;
     TcpFrameStreamDecoder  decStream;
+    std::optional<FileUploadState> optFileUpload;
 };
 
 ManagerNodeSnapshot::ManagerNodeSnapshot(
@@ -448,6 +467,54 @@ bool ManagerNetworkController::bSendNodeControl(
     );
 }
 
+bool ManagerNetworkController::bQueueFileUpload(
+    const QString& strEndpointKey,
+    const std::string& strRequestId,
+    std::uint64_t u64ChainId,
+    std::shared_ptr<const QByteArray> ptrFileBytes
+)
+{
+    const std::shared_ptr<EndpointState> ptrEndpoint =
+        m_mapEndpoints.value(strEndpointKey);
+    if (!ptrEndpoint
+        || ptrEndpoint->roleNode == NodeRole::Attacker
+        || ptrEndpoint->stateConnection != ManagerConnectionState::Connected
+        || ptrEndpoint->pSocket == nullptr
+        || ptrEndpoint->optFileUpload.has_value()
+        || strRequestId.empty()
+        || u64ChainId == 0
+        || !ptrFileBytes
+        || ptrFileBytes->isEmpty()
+        || ptrFileBytes->size() > static_cast<qsizetype>(
+            tesla::workload::FileWorkload::MAXIMUM_FILE_SIZE
+        ))
+    {
+        return false;
+    }
+
+    const NodeControlMessage msgBegin(FileUploadBeginControlDetails(
+        strRequestId,
+        u64ChainId,
+        static_cast<std::uint64_t>(ptrFileBytes->size())
+    ));
+    if (!bSendJsonFrame(
+            ptrEndpoint->pSocket,
+            NodeControlJsonCodec::strEncode(msgBegin)
+        ))
+    {
+        return false;
+    }
+
+    ptrEndpoint->optFileUpload.emplace(EndpointState::FileUploadState{
+        strRequestId,
+        u64ChainId,
+        std::move(ptrFileBytes),
+        0,
+        1
+    });
+    return bPumpFileUpload(ptrEndpoint);
+}
+
 QVector<ManagerNodeSnapshot> ManagerNetworkController::vecNodeSnapshots() const
 {
     QVector<ManagerNodeSnapshot> vecSnapshots;
@@ -581,6 +648,86 @@ void ManagerNetworkController::processPresence(
     emit nodesChanged();
 }
 
+bool ManagerNetworkController::bPumpFileUpload(
+    const std::shared_ptr<EndpointState>& ptrEndpoint
+)
+{
+    if (!ptrEndpoint->optFileUpload.has_value()
+        || ptrEndpoint->pSocket == nullptr
+        || ptrEndpoint->pSocket->state() != QAbstractSocket::ConnectedState)
+    {
+        return false;
+    }
+
+    EndpointState::FileUploadState& uplFile =
+        ptrEndpoint->optFileUpload.value();
+    while (uplFile.nOffset < uplFile.ptrFileBytes->size()
+        && ptrEndpoint->pSocket->bytesToWrite()
+            < MAXIMUM_FILE_UPLOAD_SOCKET_BACKLOG)
+    {
+        const qsizetype nChunkSize = std::min(
+            FILE_UPLOAD_CHUNK_SIZE,
+            uplFile.ptrFileBytes->size() - uplFile.nOffset
+        );
+        const QByteArray arrChunk = uplFile.ptrFileBytes->mid(
+            uplFile.nOffset,
+            nChunkSize
+        );
+        const ByteBuffer vecFrame = TcpFrameCodec::vecEncode(TcpFrame(
+            FileBinaryChunk(
+                uplFile.u64ChainId,
+                uplFile.u32NextChunkIndex,
+                vecFromByteArray(arrChunk)
+            )
+        ));
+        if (ptrEndpoint->pSocket->bytesToWrite() > 0
+            && ptrEndpoint->pSocket->bytesToWrite()
+                    + static_cast<qint64>(vecFrame.size())
+                > MAXIMUM_FILE_UPLOAD_SOCKET_BACKLOG)
+        {
+            // 等待bytesWritten继续泵送，保证Qt待写缓存不越过硬上限。
+            return true;
+        }
+        if (ptrEndpoint->pSocket->write(arrToByteArray(vecFrame))
+            != static_cast<qint64>(vecFrame.size()))
+        {
+            emit logMessage(QStringLiteral("向 %1 上传文件分块失败")
+                .arg(ptrEndpoint->strNodeName));
+            ptrEndpoint->optFileUpload.reset();
+            return false;
+        }
+
+        uplFile.nOffset += nChunkSize;
+        ++uplFile.u32NextChunkIndex;
+    }
+
+    if (uplFile.nOffset != uplFile.ptrFileBytes->size()
+        || ptrEndpoint->pSocket->bytesToWrite()
+            > MAXIMUM_FILE_UPLOAD_SOCKET_BACKLOG
+                - FILE_UPLOAD_END_FRAME_RESERVE)
+    {
+        return true;
+    }
+
+    const NodeControlMessage msgEnd(FileUploadEndControlDetails(
+        uplFile.strRequestId,
+        uplFile.u64ChainId,
+        uplFile.u32NextChunkIndex - 1U,
+        static_cast<std::uint64_t>(uplFile.ptrFileBytes->size())
+    ));
+    const bool bEndQueued = bSendJsonFrame(
+        ptrEndpoint->pSocket,
+        NodeControlJsonCodec::strEncode(msgEnd)
+    );
+    if (!bEndQueued)
+    {
+        emit logMessage(QStringLiteral("向 %1 发送文件结束帧失败")
+            .arg(ptrEndpoint->strNodeName));
+    }
+    ptrEndpoint->optFileUpload.reset();
+    return bEndQueued;
+}
+
 void ManagerNetworkController::connectEndpoint(
     const std::shared_ptr<EndpointState>& ptrEndpoint
 )
@@ -621,6 +768,15 @@ void ManagerNetworkController::connectEndpoint(
     );
     connect(
         pSocket,
+        &QTcpSocket::bytesWritten,
+        this,
+        [this, ptrEndpoint](qint64)
+        {
+            static_cast<void>(bPumpFileUpload(ptrEndpoint));
+        }
+    );
+    connect(
+        pSocket,
         &QTcpSocket::disconnected,
         this,
         [this, ptrEndpoint, pSocket]()
@@ -629,6 +785,7 @@ void ManagerNetworkController::connectEndpoint(
             {
                 ptrEndpoint->pSocket = nullptr;
                 ptrEndpoint->decStream.reset();
+                ptrEndpoint->optFileUpload.reset();
                 ptrEndpoint->stateConnection = ManagerConnectionState::Disconnected;
                 emit nodesChanged();
             }
@@ -652,6 +809,7 @@ void ManagerNetworkController::connectEndpoint(
                 ptrEndpoint->stateConnection =
                     ManagerConnectionState::Disconnected;
                 ptrEndpoint->decStream.reset();
+                ptrEndpoint->optFileUpload.reset();
                 pSocket->abort();
                 pSocket->deleteLater();
                 emit nodesChanged();

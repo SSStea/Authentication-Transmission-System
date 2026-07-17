@@ -3,6 +3,9 @@
 #include "tesla/node_agent/SystemTimeSynchronization.h"
 
 #include <chrono>
+#include <cctype>
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <utility>
 
@@ -17,6 +20,64 @@ std::uint64_t u64NowMilliseconds()
             std::chrono::system_clock::now().time_since_epoch()
         ).count()
     );
+}
+
+std::string strSafeFileComponent(const std::string& strValue)
+{
+    std::string strResult;
+    strResult.reserve(strValue.size());
+    for (unsigned char chValue : strValue)
+    {
+        strResult.push_back(
+            std::isalnum(chValue) || chValue == '-' || chValue == '_'
+                ? static_cast<char>(chValue)
+                : '_'
+        );
+    }
+    return strResult;
+}
+
+bool bPersistRecoveredFile(
+    const std::string& strRoundId,
+    const std::string& strSenderId,
+    std::uint64_t u64ChainId,
+    const protocol::ByteBuffer& vecFileBytes
+)
+{
+    try
+    {
+        const std::filesystem::path pthDirectory("recovered_files");
+        std::filesystem::create_directories(pthDirectory);
+        const std::string strBaseName = strSafeFileComponent(strRoundId)
+            + "_" + strSafeFileComponent(strSenderId)
+            + "_" + std::to_string(u64ChainId) + ".bin";
+        const std::filesystem::path pthFinal = pthDirectory / strBaseName;
+        const std::filesystem::path pthTemporary = pthDirectory
+            / (strBaseName + ".tmp");
+
+        std::ofstream stmFile(
+            pthTemporary,
+            std::ios::binary | std::ios::trunc
+        );
+        stmFile.write(
+            reinterpret_cast<const char*>(vecFileBytes.data()),
+            static_cast<std::streamsize>(vecFileBytes.size())
+        );
+        stmFile.close();
+        if (!stmFile)
+        {
+            std::error_code errRemove;
+            std::filesystem::remove(pthTemporary, errRemove);
+            return false;
+        }
+
+        std::filesystem::rename(pthTemporary, pthFinal);
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 }
 
@@ -70,6 +131,20 @@ NodeAgentService::NodeAgentService(
                   roleClient,
                   msgMessage
               );
+          },
+          [this](
+              protocol::TcpClientRole roleClient,
+              const std::string& strRequestId,
+              std::uint64_t u64ChainId,
+              workload::FileWorkload wrkFile
+          )
+          {
+              return m_runAuthentication.msgApplyFilePayload(
+                  roleClient,
+                  strRequestId,
+                  u64ChainId,
+                  std::move(wrkFile)
+              );
           }
       ),
       m_runAuthentication(
@@ -89,7 +164,8 @@ NodeAgentService::NodeAgentService(
                   {
                       return SystemTimeSynchronization::stsQuery();
                   }
-              )
+              ),
+          bPersistRecoveredFile
       ),
       m_srvDiscovery(
           m_cfgConfig.strBindAddress(),

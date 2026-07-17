@@ -1,7 +1,11 @@
 #pragma once
 
+#include "tesla/crypto/CryptoTypes.h"
+
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <variant>
 
 namespace tesla::core
 {
@@ -36,6 +40,58 @@ enum class AuthenticationRuntimeResultStatus
     TimeUnsynchronized
 };
 
+/** @brief 文本模式的恢复结果；Sender使用空文本，Receiver使用去除补零后的文本。 */
+class TextAuthenticationRuntimeResultDetails final
+{
+public:
+    explicit TextAuthenticationRuntimeResultDetails(std::string strRecoveredText);
+
+    const std::string& strRecoveredText() const noexcept;
+
+private:
+    std::string m_strRecoveredText;
+};
+
+/** @brief 文件Sender结果只报告本地载荷大小，不携带文件字节。 */
+class FileSenderAuthenticationRuntimeResultDetails final
+{
+public:
+    explicit FileSenderAuthenticationRuntimeResultDetails(
+        std::uint64_t u64OriginalByteCount
+    );
+
+    std::uint64_t u64OriginalByteCount() const noexcept;
+
+private:
+    std::uint64_t m_u64OriginalByteCount;
+};
+
+/** @brief 文件Receiver结果保留恢复字节供平台原子落盘，TCP只序列化大小和Hash。 */
+class FileReceiverAuthenticationRuntimeResultDetails final
+{
+public:
+    FileReceiverAuthenticationRuntimeResultDetails(
+        std::uint64_t u64OriginalByteCount,
+        crypto::ByteBuffer vecRecoveredFileBytes,
+        std::optional<crypto::Digest> optRecoveredSha256
+    );
+
+    std::uint64_t u64OriginalByteCount() const noexcept;
+    const crypto::ByteBuffer& vecRecoveredFileBytes() const noexcept;
+    const std::optional<crypto::Digest>& optRecoveredSha256() const noexcept;
+
+private:
+    std::uint64_t                 m_u64OriginalByteCount;
+    crypto::ByteBuffer            m_vecRecoveredFileBytes;
+    std::optional<crypto::Digest> m_optRecoveredSha256;
+};
+
+using AuthenticationRuntimeResultDetails = std::variant<
+    TextAuthenticationRuntimeResultDetails,
+    FileSenderAuthenticationRuntimeResultDetails,
+    FileReceiverAuthenticationRuntimeResultDetails
+>;
+
 /** @brief 公共Sender和Receiver运行时向节点适配层返回的最终轮次结果。 */
 class AuthenticationRuntimeResult final
 {
@@ -50,7 +106,7 @@ public:
         std::uint32_t u32AuthenticatedPacketCount,
         std::uint32_t u32FailedPacketCount,
         std::uint32_t u32MissingPacketCount,
-        std::string strRecoveredText,
+        AuthenticationRuntimeResultDetails varResultDetails,
         std::string strMessage
     );
 
@@ -63,7 +119,7 @@ public:
     std::uint32_t u32AuthenticatedPacketCount() const noexcept;
     std::uint32_t u32FailedPacketCount() const noexcept;
     std::uint32_t u32MissingPacketCount() const noexcept;
-    const std::string& strRecoveredText() const noexcept;
+    const AuthenticationRuntimeResultDetails& varResultDetails() const noexcept;
     const std::string& strMessage() const noexcept;
 
 private:
@@ -76,7 +132,7 @@ private:
     std::uint32_t                     m_u32AuthenticatedPacketCount;
     std::uint32_t                     m_u32FailedPacketCount;
     std::uint32_t                     m_u32MissingPacketCount;
-    std::string                       m_strRecoveredText;
+    AuthenticationRuntimeResultDetails m_varResultDetails;
     std::string                       m_strMessage;
 };
 }

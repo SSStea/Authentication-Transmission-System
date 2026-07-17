@@ -5,12 +5,14 @@
 #include "tesla/crypto/OpenSslSecureRandomProvider.h"
 
 #include <QObject>
+#include <QByteArray>
 #include <QSet>
 #include <QString>
 #include <QVector>
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -58,6 +60,45 @@ private:
     QString m_strText;
 };
 
+/** @brief 集中管理端一次文件认证轮次的已校验输入和原始Hash。 */
+class ManagerFileRoundConfiguration final
+{
+public:
+    ManagerFileRoundConfiguration(
+        tesla::protocol::UdpAuthenticationMode modeAuthentication,
+        tesla::protocol::AuthenticationCryptoAlgorithm algCryptoAlgorithm,
+        std::uint32_t u32PacketsPerInterval,
+        std::uint32_t u32DisclosureDelay,
+        std::uint32_t u32IntervalMilliseconds,
+        std::optional<tesla::protocol::ImprovedTeslaControlParameters>
+            optImprovedParameters,
+        std::shared_ptr<const QByteArray> ptrFileBytes,
+        QByteArray arrOriginalSha256
+    );
+
+    tesla::protocol::UdpAuthenticationMode modeAuthentication() const noexcept;
+    tesla::protocol::AuthenticationCryptoAlgorithm
+        algCryptoAlgorithm() const noexcept;
+    std::uint32_t u32PacketsPerInterval() const noexcept;
+    std::uint32_t u32DisclosureDelay() const noexcept;
+    std::uint32_t u32IntervalMilliseconds() const noexcept;
+    const std::optional<tesla::protocol::ImprovedTeslaControlParameters>&
+        optImprovedParameters() const noexcept;
+    const std::shared_ptr<const QByteArray>& ptrFileBytes() const noexcept;
+    const QByteArray& arrOriginalSha256() const noexcept;
+
+private:
+    tesla::protocol::UdpAuthenticationMode m_modeAuthentication;
+    tesla::protocol::AuthenticationCryptoAlgorithm m_algCryptoAlgorithm;
+    std::uint32_t m_u32PacketsPerInterval;
+    std::uint32_t m_u32DisclosureDelay;
+    std::uint32_t m_u32IntervalMilliseconds;
+    std::optional<tesla::protocol::ImprovedTeslaControlParameters>
+        m_optImprovedParameters;
+    std::shared_ptr<const QByteArray> m_ptrFileBytes;
+    QByteArray m_arrOriginalSha256;
+};
+
 /**
  * @brief 管理CA材料、配置确认和统一开始/暂停/继续/停止时间线。
  *
@@ -79,6 +120,12 @@ public:
         const QVector<ManagerNodeSnapshot>& vecNodeSnapshots,
         QString& strError
     );
+    bool bPrepareFileRound(
+        const ManagerFileRoundConfiguration& cfgRound,
+        const QSet<QString>& setSelectedSenderEndpoints,
+        const QVector<ManagerNodeSnapshot>& vecNodeSnapshots,
+        QString& strError
+    );
     bool bStartRound(QString& strError);
     bool bPauseRound(QString& strError);
     bool bResumeRound(QString& strError);
@@ -92,6 +139,15 @@ signals:
     void configurationStateChanged(bool bReady, const QString& strMessage);
     void roundStateChanged(bool bRunning, bool bPaused);
     void resultMessage(const QString& strMessage);
+    void fileComparisonResult(
+        const QString& strSenderId,
+        quint64 u64ChainId,
+        quint64 u64OriginalByteCount,
+        quint64 u64RecoveredByteCount,
+        const QString& strOriginalSha256,
+        const QString& strRecoveredSha256,
+        bool bMatches
+    );
 
 private:
     struct SenderTarget final
@@ -105,6 +161,7 @@ private:
         const QString& strEndpointKey,
         const QString& strJson
     );
+    void handleNodeStateChanged();
     bool bSendRequired(
         const QString& strEndpointKey,
         const tesla::protocol::NodeControlMessage& msgMessage,
@@ -135,6 +192,7 @@ private:
     bool m_bConfigurationReady;
     bool m_bRoundRunning;
     bool m_bRoundPaused;
+    bool m_bFileRound;
     QString m_strRoundId;
     std::uint32_t m_u32IntervalMilliseconds;
     std::uint32_t m_u32LastLogicalInterval;
@@ -143,4 +201,6 @@ private:
     std::uint64_t m_u64TimelineStartTimestampMilliseconds;
     std::uint64_t m_u64PauseTimestampMilliseconds;
     std::size_t m_nExpectedResultCount;
+    QByteArray m_arrOriginalFileSha256;
+    std::uint64_t m_u64OriginalFileByteCount = 0;
 };

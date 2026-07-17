@@ -163,6 +163,16 @@ NodeControlMessageType NodeControlMessage::typeMessage() const noexcept
         return NodeControlMessageType::TextPayloadConfig;
     }
 
+    if (std::holds_alternative<FileUploadBeginControlDetails>(m_varDetails))
+    {
+        return NodeControlMessageType::FileUploadBegin;
+    }
+
+    if (std::holds_alternative<FileUploadEndControlDetails>(m_varDetails))
+    {
+        return NodeControlMessageType::FileUploadEnd;
+    }
+
     if (std::holds_alternative<AuthenticationConfigAcknowledgementControlDetails>(
             m_varDetails
         ))

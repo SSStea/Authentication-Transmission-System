@@ -94,12 +94,36 @@ ReceiverAuthenticationContext AuthenticationAuthority::ctxCreateReceiverContext(
     std::string strSenderIpAddress
 ) const
 {
+    if (matMaterial.prmRoundParameters().modePayload()
+        != AuthenticationPayloadMode::Text)
+    {
+        throw std::invalid_argument(
+            "File Receiver context requires its original byte count"
+        );
+    }
+
+    return ctxCreateReceiverContext(
+        matMaterial,
+        std::move(strSenderIpAddress),
+        TextReceiverPayloadDetails(
+            matMaterial.prmRoundParameters().u32TotalPacketCount()
+        )
+    );
+}
+
+ReceiverAuthenticationContext AuthenticationAuthority::ctxCreateReceiverContext(
+    const SenderAuthenticationMaterial& matMaterial,
+    std::string strSenderIpAddress,
+    ReceiverPayloadDetails varPayloadDetails
+) const
+{
     return ReceiverAuthenticationContext(
         matMaterial.strSenderId(),
         std::move(strSenderIpAddress),
         matMaterial.u64ChainId(),
         matMaterial.digCommitmentKey(),
-        matMaterial.prmRoundParameters()
+        matMaterial.prmRoundParameters(),
+        std::move(varPayloadDetails)
     );
 }
 
