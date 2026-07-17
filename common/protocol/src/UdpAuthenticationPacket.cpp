@@ -6,6 +6,36 @@
 
 namespace tesla::protocol
 {
+UdpAuthenticationPacketHeader::UdpAuthenticationPacketHeader(
+    std::uint64_t u64ChainId,
+    std::uint32_t u32IntervalIndex,
+    std::uint32_t u32PacketIndex
+)
+    : m_u64ChainId(u64ChainId),
+      m_u32IntervalIndex(u32IntervalIndex),
+      m_u32PacketIndex(u32PacketIndex)
+{
+    if (m_u64ChainId == 0 || m_u32IntervalIndex == 0)
+    {
+        throw std::invalid_argument("UDP authentication header identity is invalid");
+    }
+}
+
+std::uint64_t UdpAuthenticationPacketHeader::u64ChainId() const noexcept
+{
+    return m_u64ChainId;
+}
+
+std::uint32_t UdpAuthenticationPacketHeader::u32IntervalIndex() const noexcept
+{
+    return m_u32IntervalIndex;
+}
+
+std::uint32_t UdpAuthenticationPacketHeader::u32PacketIndex() const noexcept
+{
+    return m_u32PacketIndex;
+}
+
 UdpAuthenticationPacketContext::UdpAuthenticationPacketContext(
     UdpAuthenticationMode modeAuthentication,
     std::uint32_t u32PacketsPerInterval,

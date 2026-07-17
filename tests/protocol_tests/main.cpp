@@ -302,6 +302,71 @@ bool bTestAuthenticationControlJson()
         "Authentication configuration acknowledgement round trip"
     ) && bPassed;
 
+    const NodeControlMessage msgText(TextPayloadControlDetails(
+        "text-payload-1",
+        u64LargeChainId,
+        "helloworld"
+    ));
+    const NodeControlDecodeResult resText = NodeControlJsonCodec::resDecode(
+        NodeControlJsonCodec::strEncode(msgText)
+    );
+    bPassed = bExpect(
+        std::holds_alternative<NodeControlMessage>(resText)
+            && std::get<TextPayloadControlDetails>(
+                std::get<NodeControlMessage>(resText).varDetails()
+            ).strUtf8Text() == "helloworld",
+        "Stage 6 text payload JSON round trip"
+    ) && bPassed;
+
+    const NodeControlMessage msgPause(
+        AuthenticationRoundCommandControlDetails(
+            "pause-1",
+            "round-1",
+            AuthenticationRoundCommand::Pause,
+            1'700'000'001'000ULL,
+            7
+        )
+    );
+    const NodeControlDecodeResult resPause = NodeControlJsonCodec::resDecode(
+        NodeControlJsonCodec::strEncode(msgPause)
+    );
+    bPassed = bExpect(
+        std::holds_alternative<NodeControlMessage>(resPause)
+            && std::get<NodeControlMessage>(resPause).typeMessage()
+                == NodeControlMessageType::RoundPause
+            && std::get<AuthenticationRoundCommandControlDetails>(
+                std::get<NodeControlMessage>(resPause).varDetails()
+            ).u32LogicalIntervalIndex() == 7,
+        "Stage 6 pause command JSON round trip"
+    ) && bPassed;
+
+    const NodeControlMessage msgResult(
+        AuthenticationRoundResultControlDetails(
+            "round-1",
+            "UAV-301",
+            u64LargeChainId,
+            AuthenticationRoundResultRole::Receiver,
+            AuthenticationRoundResultStatus::Completed,
+            10,
+            10,
+            10,
+            0,
+            0,
+            "helloworld",
+            "completed"
+        )
+    );
+    const NodeControlDecodeResult resResult = NodeControlJsonCodec::resDecode(
+        NodeControlJsonCodec::strEncode(msgResult)
+    );
+    bPassed = bExpect(
+        std::holds_alternative<NodeControlMessage>(resResult)
+            && std::get<AuthenticationRoundResultControlDetails>(
+                std::get<NodeControlMessage>(resResult).varDetails()
+            ).u32AuthenticatedPacketCount() == 10,
+        "Stage 6 round result JSON round trip"
+    ) && bPassed;
+
     const NodeControlDecodeResult resNumericChainId = NodeControlJsonCodec::resDecode(
         R"({"type":"SENDER_AUTH_CONFIG","requestId":"bad","senderId":"UAV-301","chainId":18446744073709551615,"chainSeed":"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff","commitmentKey":"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff","round":{"cryptoAlgorithm":"SHA256","authMode":"NATIVE","totalPacketCount":10,"packetsPerInterval":4,"disclosureDelay":3,"intervalMs":100,"startTimestampMs":1700000000000,"chainLength":4}})"
     );
@@ -348,6 +413,21 @@ bool bTestNativeUdpPackets()
         vecFirst[0] == 0x01 && vecFirst[7] == 0x08
             && vecFirst[11] == 0x01 && vecFirst[15] == 0x01,
         "UDP fixed header uses network byte order"
+    ) && bPassed;
+    const UdpAuthenticationPacketHeaderDecodeResult resHeader =
+        UdpAuthenticationPacketCodec::resDecodeHeader(vecFirst);
+    bPassed = bExpect(
+        std::holds_alternative<UdpAuthenticationPacketHeader>(resHeader)
+            && std::get<UdpAuthenticationPacketHeader>(resHeader)
+                    .u64ChainId()
+                == 0x0102030405060708ULL
+            && std::get<UdpAuthenticationPacketHeader>(resHeader)
+                    .u32IntervalIndex()
+                == 1
+            && std::get<UdpAuthenticationPacketHeader>(resHeader)
+                    .u32PacketIndex()
+                == 1,
+        "UDP fast header decode preserves ordered fields"
     ) && bPassed;
 
     UdpAuthenticationPacketDecodeResult resFirst =

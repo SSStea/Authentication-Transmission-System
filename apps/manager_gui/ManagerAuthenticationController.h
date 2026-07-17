@@ -1,0 +1,146 @@
+#pragma once
+
+#include "ManagerNetworkController.h"
+#include "tesla/core/AuthenticationAuthority.h"
+#include "tesla/crypto/OpenSslSecureRandomProvider.h"
+
+#include <QObject>
+#include <QSet>
+#include <QString>
+#include <QVector>
+
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
+
+/**
+ * @brief 集中管理端一次文本认证轮次的已校验输入。
+ *
+ * 载荷、算法和调度参数放在同一个值类型中，CA材料仍由控制器按Sender独立签发。
+ */
+class ManagerTextRoundConfiguration final
+{
+public:
+    ManagerTextRoundConfiguration(
+        tesla::protocol::UdpAuthenticationMode modeAuthentication,
+        tesla::protocol::AuthenticationCryptoAlgorithm algCryptoAlgorithm,
+        std::uint32_t u32TextRepeatCount,
+        std::uint32_t u32PacketsPerInterval,
+        std::uint32_t u32DisclosureDelay,
+        std::uint32_t u32IntervalMilliseconds,
+        std::optional<tesla::protocol::ImprovedTeslaControlParameters>
+            optImprovedParameters,
+        QString strText
+    );
+
+    tesla::protocol::UdpAuthenticationMode modeAuthentication() const noexcept;
+    tesla::protocol::AuthenticationCryptoAlgorithm
+        algCryptoAlgorithm() const noexcept;
+    std::uint32_t u32TextRepeatCount() const noexcept;
+    std::uint32_t u32PacketsPerInterval() const noexcept;
+    std::uint32_t u32DisclosureDelay() const noexcept;
+    std::uint32_t u32IntervalMilliseconds() const noexcept;
+    const std::optional<tesla::protocol::ImprovedTeslaControlParameters>&
+        optImprovedParameters() const noexcept;
+    const QString& strText() const noexcept;
+
+private:
+    tesla::protocol::UdpAuthenticationMode m_modeAuthentication;
+    tesla::protocol::AuthenticationCryptoAlgorithm m_algCryptoAlgorithm;
+    std::uint32_t m_u32TextRepeatCount;
+    std::uint32_t m_u32PacketsPerInterval;
+    std::uint32_t m_u32DisclosureDelay;
+    std::uint32_t m_u32IntervalMilliseconds;
+    std::optional<tesla::protocol::ImprovedTeslaControlParameters>
+        m_optImprovedParameters;
+    QString m_strText;
+};
+
+/**
+ * @brief 管理CA材料、配置确认和统一开始/暂停/继续/停止时间线。
+ *
+ * 控制器只经ManagerNetworkController发送强类型控制消息，不直接操作Socket。
+ */
+class ManagerAuthenticationController final : public QObject
+{
+    Q_OBJECT
+
+public:
+    explicit ManagerAuthenticationController(
+        ManagerNetworkController& ctlNetwork,
+        QObject* pParent = nullptr
+    );
+
+    bool bPrepareTextRound(
+        const ManagerTextRoundConfiguration& cfgRound,
+        const QSet<QString>& setSelectedSenderEndpoints,
+        const QVector<ManagerNodeSnapshot>& vecNodeSnapshots,
+        QString& strError
+    );
+    bool bStartRound(QString& strError);
+    bool bPauseRound(QString& strError);
+    bool bResumeRound(QString& strError);
+    bool bStopRound(QString& strError);
+
+    bool bConfigurationReady() const noexcept;
+    bool bRoundRunning() const noexcept;
+    bool bRoundPaused() const noexcept;
+
+signals:
+    void configurationStateChanged(bool bReady, const QString& strMessage);
+    void roundStateChanged(bool bRunning, bool bPaused);
+    void resultMessage(const QString& strMessage);
+
+private:
+    struct SenderTarget final
+    {
+        QString strEndpointKey;
+        QString strIpAddress;
+        tesla::core::SenderAuthenticationMaterial matMaterial;
+    };
+
+    void processNodeControlJson(
+        const QString& strEndpointKey,
+        const QString& strJson
+    );
+    bool bSendRequired(
+        const QString& strEndpointKey,
+        const tesla::protocol::NodeControlMessage& msgMessage,
+        const QString& strRequestId,
+        QString& strError
+    );
+    bool bBroadcastRoundCommand(
+        tesla::protocol::AuthenticationRoundCommand cmdCommand,
+        std::uint64_t u64ExecutionTimestampMilliseconds,
+        std::uint32_t u32LogicalIntervalIndex,
+        QString& strError
+    );
+    tesla::protocol::AuthenticationRoundControlParameters
+        prmControlParameters(
+            const tesla::core::AuthenticationRoundParameters& prmParameters
+        ) const;
+    QString strCreateRequestId(const QString& strPrefix) const;
+    void resetPreparedRound();
+
+    ManagerNetworkController& m_ctlNetwork;
+    tesla::crypto::OpenSslSecureRandomProvider m_rngSecureRandom;
+    tesla::core::AuthenticationAuthority m_autAuthority;
+    std::vector<SenderTarget> m_vecSenderTargets;
+    QSet<QString> m_setParticipantEndpoints;
+    QSet<QString> m_setPendingConfigurationRequests;
+    QSet<QString> m_setReceivedResultKeys;
+    bool m_bConfigurationRejected;
+    bool m_bConfigurationReady;
+    bool m_bRoundRunning;
+    bool m_bRoundPaused;
+    QString m_strRoundId;
+    std::uint32_t m_u32IntervalMilliseconds;
+    std::uint32_t m_u32LastLogicalInterval;
+    std::uint32_t m_u32TimelineFirstInterval;
+    std::uint32_t m_u32PauseAfterInterval;
+    std::uint64_t m_u64TimelineStartTimestampMilliseconds;
+    std::uint64_t m_u64PauseTimestampMilliseconds;
+    std::size_t m_nExpectedResultCount;
+};

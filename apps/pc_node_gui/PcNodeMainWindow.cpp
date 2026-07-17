@@ -27,7 +27,7 @@ PcNodeMainWindow::PcNodeMainWindow(
           u16DiscoveryPort,
           u16ManagementPort,
           std::chrono::milliseconds(1000),
-          this
+          nullptr
       ),
       m_pServiceValue(nullptr),
       m_pTcpValue(nullptr),
@@ -142,8 +142,8 @@ QWidget* PcNodeMainWindow::pCreateStatusPage()
 
     QLabel* pHintLabel = new QLabel(
         QStringLiteral(
-            "本阶段只接受CLIENT_HELLO、PING和STATUS_REQUEST。"
-            "认证配置、文件上传和UDP认证发送将在阶段6、7接入。"
+            "阶段6已接入文本认证配置、原生/改进TESLA UDP收发以及"
+            "开始、暂停、继续和停止控制；文件载荷将在阶段7接入。"
         ),
         pPage
     );

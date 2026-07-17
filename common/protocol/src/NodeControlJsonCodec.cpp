@@ -30,8 +30,22 @@ const char* pTypeName(NodeControlMessageType typeMessage)
         return "SENDER_AUTH_CONFIG";
     case NodeControlMessageType::ReceiverAuthenticationContexts:
         return "RECEIVER_AUTH_CONTEXTS";
+    case NodeControlMessageType::TextPayloadConfig:
+        return "TEXT_PAYLOAD";
     case NodeControlMessageType::AuthenticationConfigAcknowledgement:
         return "AUTH_CONFIG_ACK";
+    case NodeControlMessageType::RoundStart:
+        return "ROUND_START";
+    case NodeControlMessageType::RoundPause:
+        return "ROUND_PAUSE";
+    case NodeControlMessageType::RoundResume:
+        return "ROUND_RESUME";
+    case NodeControlMessageType::RoundStop:
+        return "ROUND_STOP";
+    case NodeControlMessageType::RoundCommandAcknowledgement:
+        return "ROUND_COMMAND_ACK";
+    case NodeControlMessageType::RoundResult:
+        return "ROUND_RESULT";
     case NodeControlMessageType::ErrorResponse:
         return "ERROR";
     }
@@ -118,9 +132,17 @@ UdpAuthenticationMode modeAuthenticationParse(const std::string& strMode)
 
 const char* pConfigTargetName(AuthenticationConfigTarget targetConfig)
 {
-    return targetConfig == AuthenticationConfigTarget::Sender
-        ? "SENDER"
-        : "RECEIVER";
+    switch (targetConfig)
+    {
+    case AuthenticationConfigTarget::Sender:
+        return "SENDER";
+    case AuthenticationConfigTarget::Receiver:
+        return "RECEIVER";
+    case AuthenticationConfigTarget::TextPayload:
+        return "TEXT_PAYLOAD";
+    }
+
+    throw std::invalid_argument("Unknown authentication configuration target");
 }
 
 AuthenticationConfigTarget targetConfigParse(const std::string& strTarget)
@@ -135,7 +157,184 @@ AuthenticationConfigTarget targetConfigParse(const std::string& strTarget)
         return AuthenticationConfigTarget::Receiver;
     }
 
+    if (strTarget == "TEXT_PAYLOAD")
+    {
+        return AuthenticationConfigTarget::TextPayload;
+    }
+
     throw std::invalid_argument("Unknown authentication configuration target");
+}
+
+const char* pPayloadModeName(AuthenticationPayloadMode modePayload)
+{
+    return modePayload == AuthenticationPayloadMode::Text ? "TEXT" : "FILE";
+}
+
+AuthenticationPayloadMode modePayloadParse(const std::string& strMode)
+{
+    if (strMode == "TEXT")
+    {
+        return AuthenticationPayloadMode::Text;
+    }
+
+    if (strMode == "FILE")
+    {
+        return AuthenticationPayloadMode::File;
+    }
+
+    throw std::invalid_argument("Unknown authentication payload mode");
+}
+
+const char* pRoundCommandName(AuthenticationRoundCommand cmdCommand)
+{
+    switch (cmdCommand)
+    {
+    case AuthenticationRoundCommand::Start:
+        return "START";
+    case AuthenticationRoundCommand::Pause:
+        return "PAUSE";
+    case AuthenticationRoundCommand::Resume:
+        return "RESUME";
+    case AuthenticationRoundCommand::Stop:
+        return "STOP";
+    }
+
+    throw std::invalid_argument("Unknown authentication round command");
+}
+
+AuthenticationRoundCommand cmdRoundParse(const std::string& strCommand)
+{
+    if (strCommand == "START")
+    {
+        return AuthenticationRoundCommand::Start;
+    }
+
+    if (strCommand == "PAUSE")
+    {
+        return AuthenticationRoundCommand::Pause;
+    }
+
+    if (strCommand == "RESUME")
+    {
+        return AuthenticationRoundCommand::Resume;
+    }
+
+    if (strCommand == "STOP")
+    {
+        return AuthenticationRoundCommand::Stop;
+    }
+
+    throw std::invalid_argument("Unknown authentication round command");
+}
+
+AuthenticationRoundCommand cmdRoundFromType(const std::string& strType)
+{
+    if (strType == "ROUND_START")
+    {
+        return AuthenticationRoundCommand::Start;
+    }
+
+    if (strType == "ROUND_PAUSE")
+    {
+        return AuthenticationRoundCommand::Pause;
+    }
+
+    if (strType == "ROUND_RESUME")
+    {
+        return AuthenticationRoundCommand::Resume;
+    }
+
+    if (strType == "ROUND_STOP")
+    {
+        return AuthenticationRoundCommand::Stop;
+    }
+
+    throw std::invalid_argument("Unknown authentication round command type");
+}
+
+const char* pResultRoleName(AuthenticationRoundResultRole roleResult)
+{
+    return roleResult == AuthenticationRoundResultRole::Sender
+        ? "SENDER"
+        : "RECEIVER";
+}
+
+AuthenticationRoundResultRole roleResultParse(const std::string& strRole)
+{
+    if (strRole == "SENDER")
+    {
+        return AuthenticationRoundResultRole::Sender;
+    }
+
+    if (strRole == "RECEIVER")
+    {
+        return AuthenticationRoundResultRole::Receiver;
+    }
+
+    throw std::invalid_argument("Unknown authentication result role");
+}
+
+const char* pResultStatusName(AuthenticationRoundResultStatus statusResult)
+{
+    switch (statusResult)
+    {
+    case AuthenticationRoundResultStatus::Completed:
+        return "COMPLETED";
+    case AuthenticationRoundResultStatus::AuthenticationFailed:
+        return "AUTHENTICATION_FAILED";
+    case AuthenticationRoundResultStatus::VerificationTimeout:
+        return "VERIFICATION_TIMEOUT";
+    case AuthenticationRoundResultStatus::InvalidSchedulingOverrun:
+        return "INVALID_SCHEDULING_OVERRUN";
+    case AuthenticationRoundResultStatus::Stopped:
+        return "STOPPED";
+    case AuthenticationRoundResultStatus::ProtocolIncomplete:
+        return "PROTOCOL_INCOMPLETE";
+    case AuthenticationRoundResultStatus::TimeUnsynchronized:
+        return "TIME_UNSYNCHRONIZED";
+    }
+
+    throw std::invalid_argument("Unknown authentication round result status");
+}
+
+AuthenticationRoundResultStatus statusResultParse(const std::string& strStatus)
+{
+    if (strStatus == "COMPLETED")
+    {
+        return AuthenticationRoundResultStatus::Completed;
+    }
+
+    if (strStatus == "AUTHENTICATION_FAILED")
+    {
+        return AuthenticationRoundResultStatus::AuthenticationFailed;
+    }
+
+    if (strStatus == "VERIFICATION_TIMEOUT")
+    {
+        return AuthenticationRoundResultStatus::VerificationTimeout;
+    }
+
+    if (strStatus == "INVALID_SCHEDULING_OVERRUN")
+    {
+        return AuthenticationRoundResultStatus::InvalidSchedulingOverrun;
+    }
+
+    if (strStatus == "STOPPED")
+    {
+        return AuthenticationRoundResultStatus::Stopped;
+    }
+
+    if (strStatus == "PROTOCOL_INCOMPLETE")
+    {
+        return AuthenticationRoundResultStatus::ProtocolIncomplete;
+    }
+
+    if (strStatus == "TIME_UNSYNCHRONIZED")
+    {
+        return AuthenticationRoundResultStatus::TimeUnsynchronized;
+    }
+
+    throw std::invalid_argument("Unknown authentication round result status");
 }
 
 nlohmann::json jsnEncodeRoundParameters(
@@ -150,7 +349,8 @@ nlohmann::json jsnEncodeRoundParameters(
         {"disclosureDelay", prmParameters.u32DisclosureDelay()},
         {"intervalMs", prmParameters.u32IntervalMilliseconds()},
         {"startTimestampMs", prmParameters.u64StartTimestampMilliseconds()},
-        {"chainLength", prmParameters.u32ChainLength()}
+        {"chainLength", prmParameters.u32ChainLength()},
+        {"payloadMode", pPayloadModeName(prmParameters.modePayload())}
     };
 
     if (prmParameters.optImprovedParameters().has_value())
@@ -199,7 +399,10 @@ AuthenticationRoundControlParameters prmDecodeRoundParameters(
         jsnParameters.at("intervalMs").get<std::uint32_t>(),
         jsnParameters.at("startTimestampMs").get<std::uint64_t>(),
         jsnParameters.at("chainLength").get<std::uint32_t>(),
-        std::move(optImprovedParameters)
+        std::move(optImprovedParameters),
+        jsnParameters.contains("payloadMode")
+            ? modePayloadParse(jsnParameters.at("payloadMode").get<std::string>())
+            : AuthenticationPayloadMode::Text
     );
 }
 
@@ -292,6 +495,16 @@ std::string NodeControlJsonCodec::strEncode(const NodeControlMessage& msgMessage
             });
         }
     }
+    else if (msgMessage.typeMessage() == NodeControlMessageType::TextPayloadConfig)
+    {
+        const TextPayloadControlDetails& detPayload =
+            std::get<TextPayloadControlDetails>(msgMessage.varDetails());
+        jsnMessage["requestId"] = detPayload.strRequestId();
+        jsnMessage["chainId"] = AuthenticationControlValueCodec::strEncodeChainId(
+            detPayload.u64ChainId()
+        );
+        jsnMessage["text"] = detPayload.strUtf8Text();
+    }
     else if (msgMessage.typeMessage()
         == NodeControlMessageType::AuthenticationConfigAcknowledgement)
     {
@@ -304,6 +517,62 @@ std::string NodeControlJsonCodec::strEncode(const NodeControlMessage& msgMessage
         jsnMessage["accepted"] = detAcknowledgement.bAccepted();
         jsnMessage["errorCode"] = detAcknowledgement.strErrorCode();
         jsnMessage["message"] = detAcknowledgement.strMessage();
+    }
+    else if (msgMessage.typeMessage() == NodeControlMessageType::RoundStart
+        || msgMessage.typeMessage() == NodeControlMessageType::RoundPause
+        || msgMessage.typeMessage() == NodeControlMessageType::RoundResume
+        || msgMessage.typeMessage() == NodeControlMessageType::RoundStop)
+    {
+        const AuthenticationRoundCommandControlDetails& detCommand =
+            std::get<AuthenticationRoundCommandControlDetails>(
+                msgMessage.varDetails()
+            );
+        jsnMessage["requestId"] = detCommand.strRequestId();
+        jsnMessage["roundId"] = detCommand.strRoundId();
+
+        if (detCommand.cmdCommand() != AuthenticationRoundCommand::Stop)
+        {
+            jsnMessage["executionTimestampMs"] =
+                detCommand.u64ExecutionTimestampMilliseconds();
+            jsnMessage["logicalIntervalIndex"] =
+                detCommand.u32LogicalIntervalIndex();
+        }
+    }
+    else if (msgMessage.typeMessage()
+        == NodeControlMessageType::RoundCommandAcknowledgement)
+    {
+        const AuthenticationRoundAcknowledgementControlDetails& detAcknowledgement =
+            std::get<AuthenticationRoundAcknowledgementControlDetails>(
+                msgMessage.varDetails()
+            );
+        jsnMessage["requestId"] = detAcknowledgement.strRequestId();
+        jsnMessage["roundId"] = detAcknowledgement.strRoundId();
+        jsnMessage["command"] = pRoundCommandName(detAcknowledgement.cmdCommand());
+        jsnMessage["accepted"] = detAcknowledgement.bAccepted();
+        jsnMessage["errorCode"] = detAcknowledgement.strErrorCode();
+        jsnMessage["message"] = detAcknowledgement.strMessage();
+    }
+    else if (msgMessage.typeMessage() == NodeControlMessageType::RoundResult)
+    {
+        const AuthenticationRoundResultControlDetails& detResult =
+            std::get<AuthenticationRoundResultControlDetails>(
+                msgMessage.varDetails()
+            );
+        jsnMessage["roundId"] = detResult.strRoundId();
+        jsnMessage["senderId"] = detResult.strSenderId();
+        jsnMessage["chainId"] = AuthenticationControlValueCodec::strEncodeChainId(
+            detResult.u64ChainId()
+        );
+        jsnMessage["role"] = pResultRoleName(detResult.roleResult());
+        jsnMessage["status"] = pResultStatusName(detResult.statusResult());
+        jsnMessage["expectedPacketCount"] = detResult.u32ExpectedPacketCount();
+        jsnMessage["receivedPacketCount"] = detResult.u32ReceivedPacketCount();
+        jsnMessage["authenticatedPacketCount"] =
+            detResult.u32AuthenticatedPacketCount();
+        jsnMessage["failedPacketCount"] = detResult.u32FailedPacketCount();
+        jsnMessage["missingPacketCount"] = detResult.u32MissingPacketCount();
+        jsnMessage["recoveredText"] = detResult.strRecoveredText();
+        jsnMessage["message"] = detResult.strMessage();
     }
     else
     {
@@ -424,6 +693,17 @@ NodeControlDecodeResult NodeControlJsonCodec::resDecode(const std::string& strJs
             ));
         }
 
+        if (strType == "TEXT_PAYLOAD")
+        {
+            return NodeControlMessage(TextPayloadControlDetails(
+                jsnMessage.at("requestId").get<std::string>(),
+                AuthenticationControlValueCodec::u64DecodeChainId(
+                    jsnMessage.at("chainId").get<std::string>()
+                ),
+                jsnMessage.at("text").get<std::string>()
+            ));
+        }
+
         if (strType == "AUTH_CONFIG_ACK")
         {
             return NodeControlMessage(
@@ -435,6 +715,59 @@ NodeControlDecodeResult NodeControlJsonCodec::resDecode(const std::string& strJs
                     jsnMessage.at("message").get<std::string>()
                 )
             );
+        }
+
+        if (strType == "ROUND_START"
+            || strType == "ROUND_PAUSE"
+            || strType == "ROUND_RESUME"
+            || strType == "ROUND_STOP")
+        {
+            const AuthenticationRoundCommand cmdCommand = cmdRoundFromType(strType);
+            return NodeControlMessage(AuthenticationRoundCommandControlDetails(
+                jsnMessage.at("requestId").get<std::string>(),
+                jsnMessage.at("roundId").get<std::string>(),
+                cmdCommand,
+                cmdCommand == AuthenticationRoundCommand::Stop
+                    ? 0
+                    : jsnMessage.at("executionTimestampMs").get<std::uint64_t>(),
+                cmdCommand == AuthenticationRoundCommand::Stop
+                    ? 0
+                    : jsnMessage.at("logicalIntervalIndex").get<std::uint32_t>()
+            ));
+        }
+
+        if (strType == "ROUND_COMMAND_ACK")
+        {
+            return NodeControlMessage(
+                AuthenticationRoundAcknowledgementControlDetails(
+                    jsnMessage.at("requestId").get<std::string>(),
+                    jsnMessage.at("roundId").get<std::string>(),
+                    cmdRoundParse(jsnMessage.at("command").get<std::string>()),
+                    jsnMessage.at("accepted").get<bool>(),
+                    jsnMessage.at("errorCode").get<std::string>(),
+                    jsnMessage.at("message").get<std::string>()
+                )
+            );
+        }
+
+        if (strType == "ROUND_RESULT")
+        {
+            return NodeControlMessage(AuthenticationRoundResultControlDetails(
+                jsnMessage.at("roundId").get<std::string>(),
+                jsnMessage.at("senderId").get<std::string>(),
+                AuthenticationControlValueCodec::u64DecodeChainId(
+                    jsnMessage.at("chainId").get<std::string>()
+                ),
+                roleResultParse(jsnMessage.at("role").get<std::string>()),
+                statusResultParse(jsnMessage.at("status").get<std::string>()),
+                jsnMessage.at("expectedPacketCount").get<std::uint32_t>(),
+                jsnMessage.at("receivedPacketCount").get<std::uint32_t>(),
+                jsnMessage.at("authenticatedPacketCount").get<std::uint32_t>(),
+                jsnMessage.at("failedPacketCount").get<std::uint32_t>(),
+                jsnMessage.at("missingPacketCount").get<std::uint32_t>(),
+                jsnMessage.value("recoveredText", std::string()),
+                jsnMessage.at("message").get<std::string>()
+            ));
         }
 
         if (strType == "ERROR")

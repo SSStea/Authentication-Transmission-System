@@ -33,7 +33,7 @@ AttackTestMainWindow::AttackTestMainWindow(
           QStringLiteral("239.10.10.10"),
           u16MulticastPort,
           std::chrono::milliseconds(1000),
-          this
+          nullptr
       ),
       m_pServiceValue(nullptr),
       m_pControlValue(nullptr),

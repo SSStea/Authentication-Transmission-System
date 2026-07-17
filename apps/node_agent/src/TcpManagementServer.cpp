@@ -88,8 +88,34 @@ public:
         return m_nSocket;
     }
 
+    void setRole(protocol::TcpClientRole roleClient) noexcept
+    {
+        m_nRole = static_cast<int>(roleClient);
+        m_bHelloReceived = true;
+    }
+
+    bool bHelloReceived() const noexcept
+    {
+        return m_bHelloReceived.load();
+    }
+
+    protocol::TcpClientRole roleClient() const noexcept
+    {
+        return static_cast<protocol::TcpClientRole>(m_nRole.load());
+    }
+
+    std::mutex& mtxSend() noexcept
+    {
+        return m_mtxSend;
+    }
+
 private:
     std::atomic<int> m_nSocket;
+    std::atomic<bool> m_bHelloReceived{false};
+    std::atomic<int>  m_nRole{
+        static_cast<int>(protocol::TcpClientRole::Monitor)
+    };
+    std::mutex        m_mtxSend;
 };
 
 TcpManagementServer::TcpManagementServer(
@@ -219,6 +245,25 @@ std::size_t TcpManagementServer::nConnectedClientCount() const noexcept
     }
 
     return nConnected;
+}
+
+void TcpManagementServer::broadcastControlMessage(
+    const protocol::NodeControlMessage& msgMessage
+) const noexcept
+{
+    std::vector<std::shared_ptr<ClientConnection>> vecClients;
+    {
+        std::lock_guard<std::mutex> lckClients(m_mtxClients);
+        vecClients = m_vecClients;
+    }
+
+    for (const std::shared_ptr<ClientConnection>& ptrClient : vecClients)
+    {
+        if (ptrClient->bHelloReceived())
+        {
+            bSendControlMessage(ptrClient, msgMessage);
+        }
+    }
 }
 
 void TcpManagementServer::acceptLoop()
@@ -430,6 +475,7 @@ bool TcpManagementServer::bHandleFrame(
             msgMessage.varDetails()
         ).roleClient();
         bHelloReceived = true;
+        ptrClient->setRole(roleClient);
         return true;
     }
 
@@ -468,7 +514,17 @@ bool TcpManagementServer::bHandleFrame(
     if (msgMessage.typeMessage()
             == protocol::NodeControlMessageType::SenderAuthenticationConfig
         || msgMessage.typeMessage()
-            == protocol::NodeControlMessageType::ReceiverAuthenticationContexts)
+            == protocol::NodeControlMessageType::ReceiverAuthenticationContexts
+        || msgMessage.typeMessage()
+            == protocol::NodeControlMessageType::TextPayloadConfig
+        || msgMessage.typeMessage()
+            == protocol::NodeControlMessageType::RoundStart
+        || msgMessage.typeMessage()
+            == protocol::NodeControlMessageType::RoundPause
+        || msgMessage.typeMessage()
+            == protocol::NodeControlMessageType::RoundResume
+        || msgMessage.typeMessage()
+            == protocol::NodeControlMessageType::RoundStop)
     {
         return bSendControlMessage(
             ptrClient,
@@ -497,6 +553,7 @@ bool TcpManagementServer::bSendControlMessage(
             protocol::NodeControlJsonCodec::strEncode(msgMessage)
         ));
         const protocol::ByteBuffer vecResponse = protocol::TcpFrameCodec::vecEncode(frmResponse);
+        std::lock_guard<std::mutex> lckSend(ptrClient->mtxSend());
         const int nSocket = ptrClient->atmSocket().load();
         return nSocket >= 0 && bSendAll(nSocket, vecResponse);
     }

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tesla/node_agent/NodeAuthenticationConfigController.h"
+#include "tesla/core/AuthenticationNodeRuntime.h"
 #include "tesla/node_agent/NodeAgentConfig.h"
 #include "tesla/node_agent/TcpManagementServer.h"
 #include "tesla/node_agent/UdpDiscoveryService.h"
@@ -20,7 +20,9 @@ class NodeAgentService final
 public:
     explicit NodeAgentService(
         NodeAgentConfig cfgConfig,
-        UdpMulticastChannel::DatagramHandler fnDatagramHandler = {}
+        UdpMulticastChannel::DatagramHandler fnDatagramHandler = {},
+        core::AuthenticationNodeRuntime::TimeSynchronizationProvider
+            fnTimeSynchronizationProvider = {}
     );
     ~NodeAgentService();
 
@@ -44,13 +46,12 @@ public:
 private:
     NodeAgentConfig             m_cfgConfig;
     std::atomic<bool>           m_bRunning{false};
-    std::atomic<bool>           m_bSenderRunning{false};
     std::atomic<bool>           m_bReceiverRunning{false};
     std::atomic<std::size_t>    m_nReceivedDatagramCount{0};
     UdpMulticastChannel::DatagramHandler m_fnExternalDatagramHandler;
-    NodeAuthenticationConfigController m_ctlAuthenticationConfig;
-    TcpManagementServer        m_srvManagement;
-    UdpDiscoveryService        m_srvDiscovery;
     UdpMulticastChannel        m_chnMulticast;
+    TcpManagementServer        m_srvManagement;
+    core::AuthenticationNodeRuntime m_runAuthentication;
+    UdpDiscoveryService        m_srvDiscovery;
 };
 }

@@ -1,4 +1,6 @@
 qt_add_executable(tesla_manager_gui
+    ManagerAuthenticationController.cpp
+    ManagerAuthenticationController.h
     ManagerMainWindow.cpp
     ManagerMainWindow.h
     ManagerNetworkController.cpp
@@ -8,10 +10,12 @@ qt_add_executable(tesla_manager_gui
 )
 
 source_group("Header Files" FILES
+    ManagerAuthenticationController.h
     ManagerMainWindow.h
     ManagerNetworkController.h
 )
 source_group("Source Files" FILES
+    ManagerAuthenticationController.cpp
     ManagerMainWindow.cpp
     ManagerNetworkController.cpp
     main.cpp
@@ -25,6 +29,7 @@ target_link_libraries(tesla_manager_gui
         Qt6::Network
         Qt6::Widgets
         tesla_crypto
+        tesla_core
         tesla_metrics
         tesla_protocol
         tesla_workload

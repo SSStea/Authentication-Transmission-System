@@ -12,6 +12,11 @@ using UdpAuthenticationPacketDecodeResult = std::variant<
     ProtocolDecodeError
 >;
 
+using UdpAuthenticationPacketHeaderDecodeResult = std::variant<
+    UdpAuthenticationPacketHeader,
+    ProtocolDecodeError
+>;
+
 /**
  * @brief 实现第14章固定UDP认证报文的逐字段网络字节序编解码。
  *
@@ -32,6 +37,15 @@ public:
     static UdpAuthenticationPacketDecodeResult resDecode(
         const ByteBuffer& vecDatagram,
         const UdpAuthenticationPacketContext& ctxContext
+    );
+
+    /**
+     * @brief 只读取固定头，供Receiver先按源IP和chainId查找可信上下文。
+     *
+     * 条件字段仍必须在找到上下文后调用resDecode完成严格解析。
+     */
+    static UdpAuthenticationPacketHeaderDecodeResult resDecodeHeader(
+        const ByteBuffer& vecDatagram
     );
 
 private:

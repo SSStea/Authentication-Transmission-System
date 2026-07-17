@@ -36,10 +36,12 @@ add_test(
 )
 
 get_filename_component(TESLA_QT_BIN_DIR "${Qt6_DIR}/../../../bin" ABSOLUTE)
+get_filename_component(TESLA_QT_PLUGIN_DIR "${Qt6_DIR}/../../../plugins" ABSOLUTE)
 set_tests_properties(tesla_gui_stage5_tests
     PROPERTIES
         TIMEOUT 45
         RUN_SERIAL TRUE
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${TESLA_QT_PLUGIN_DIR}/platforms"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${TESLA_QT_BIN_DIR}"
 )

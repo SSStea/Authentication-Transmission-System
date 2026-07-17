@@ -16,6 +16,26 @@ enum class UdpAuthenticationMode
     Improved
 };
 
+/** @brief 不依赖认证上下文即可安全读取的固定16B UDP报文头。 */
+class UdpAuthenticationPacketHeader final
+{
+public:
+    UdpAuthenticationPacketHeader(
+        std::uint64_t u64ChainId,
+        std::uint32_t u32IntervalIndex,
+        std::uint32_t u32PacketIndex
+    );
+
+    std::uint64_t u64ChainId() const noexcept;
+    std::uint32_t u32IntervalIndex() const noexcept;
+    std::uint32_t u32PacketIndex() const noexcept;
+
+private:
+    std::uint64_t m_u64ChainId;
+    std::uint32_t m_u32IntervalIndex;
+    std::uint32_t m_u32PacketIndex;
+};
+
 /**
  * @brief Receiver通过可信TCP配置获得的UDP条件字段解析上下文。
  *

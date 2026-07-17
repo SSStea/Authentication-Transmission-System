@@ -46,7 +46,8 @@ AuthenticationRoundParameters::AuthenticationRoundParameters(
     std::uint32_t u32DisclosureDelay,
     std::uint32_t u32IntervalMilliseconds,
     std::uint64_t u64StartTimestampMilliseconds,
-    std::optional<ImprovedTeslaParameters> optImprovedParameters
+    std::optional<ImprovedTeslaParameters> optImprovedParameters,
+    AuthenticationPayloadMode modePayload
 )
     : m_algCryptoAlgorithm(algCryptoAlgorithm),
       m_modeAuthentication(modeAuthentication),
@@ -56,7 +57,8 @@ AuthenticationRoundParameters::AuthenticationRoundParameters(
       m_u32IntervalMilliseconds(u32IntervalMilliseconds),
       m_u64StartTimestampMilliseconds(u64StartTimestampMilliseconds),
       m_nDataIntervalCount(0),
-      m_optImprovedParameters(std::move(optImprovedParameters))
+      m_optImprovedParameters(std::move(optImprovedParameters)),
+      m_modePayload(modePayload)
 {
     if (m_u32TotalPacketCount == 0 || m_u32PacketsPerInterval == 0)
     {
@@ -144,6 +146,11 @@ std::size_t AuthenticationRoundParameters::nDataIntervalCount() const noexcept
 std::uint32_t AuthenticationRoundParameters::u32ChainLength() const noexcept
 {
     return static_cast<std::uint32_t>(m_nDataIntervalCount + 1U);
+}
+
+AuthenticationPayloadMode AuthenticationRoundParameters::modePayload() const noexcept
+{
+    return m_modePayload;
 }
 
 const std::optional<ImprovedTeslaParameters>&

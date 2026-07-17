@@ -1,8 +1,12 @@
 set(TESLA_CORE_HEADERS
     include/tesla/core/AuthenticationAuthority.h
     include/tesla/core/AuthenticationInputEncoder.h
+    include/tesla/core/AuthenticationNodeRuntime.h
     include/tesla/core/AuthenticationPacketInput.h
+    include/tesla/core/AuthenticationReceiverRuntime.h
     include/tesla/core/AuthenticationRoundParameters.h
+    include/tesla/core/AuthenticationRuntimeTypes.h
+    include/tesla/core/AuthenticationSenderRuntime.h
     include/tesla/core/ImprovedTeslaDetails.h
     include/tesla/core/ImprovedTeslaStrategy.h
     include/tesla/core/KsRsMatrix.h
@@ -19,8 +23,12 @@ set(TESLA_CORE_HEADERS
 set(TESLA_CORE_SOURCES
     src/AuthenticationAuthority.cpp
     src/AuthenticationInputEncoder.cpp
+    src/AuthenticationNodeRuntime.cpp
     src/AuthenticationPacketInput.cpp
+    src/AuthenticationReceiverRuntime.cpp
     src/AuthenticationRoundParameters.cpp
+    src/AuthenticationRuntimeTypes.cpp
+    src/AuthenticationSenderRuntime.cpp
     src/ImprovedTeslaDetails.cpp
     src/ImprovedTeslaStrategy.cpp
     src/KsRsMatrix.cpp
@@ -54,6 +62,7 @@ target_link_libraries(tesla_core
     PUBLIC
         tesla_crypto
         tesla_protocol
+        tesla_workload
 )
 
 set_target_properties(tesla_core

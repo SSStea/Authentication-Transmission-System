@@ -22,7 +22,15 @@ enum class AuthenticationCryptoAlgorithm
 enum class AuthenticationConfigTarget
 {
     Sender,
-    Receiver
+    Receiver,
+    TextPayload
+};
+
+/** @brief 可信TCP认证上下文中的载荷类型，UDP报文不重复携带。 */
+enum class AuthenticationPayloadMode
+{
+    Text,
+    File
 };
 
 /** @brief 改进TESLA控制配置中的分组大小和检测门限。 */
@@ -59,7 +67,8 @@ public:
         std::uint32_t u32IntervalMilliseconds,
         std::uint64_t u64StartTimestampMilliseconds,
         std::uint32_t u32ChainLength,
-        std::optional<ImprovedTeslaControlParameters> optImprovedParameters = std::nullopt
+        std::optional<ImprovedTeslaControlParameters> optImprovedParameters = std::nullopt,
+        AuthenticationPayloadMode modePayload = AuthenticationPayloadMode::Text
     );
 
     AuthenticationCryptoAlgorithm algCryptoAlgorithm() const noexcept;
@@ -70,6 +79,7 @@ public:
     std::uint32_t u32IntervalMilliseconds() const noexcept;
     std::uint64_t u64StartTimestampMilliseconds() const noexcept;
     std::uint32_t u32ChainLength() const noexcept;
+    AuthenticationPayloadMode modePayload() const noexcept;
     const std::optional<ImprovedTeslaControlParameters>&
         optImprovedParameters() const noexcept;
 
@@ -83,6 +93,7 @@ private:
     std::uint64_t                                 m_u64StartTimestampMilliseconds;
     std::uint32_t                                 m_u32ChainLength;
     std::optional<ImprovedTeslaControlParameters> m_optImprovedParameters;
+    AuthenticationPayloadMode                    m_modePayload;
 };
 
 /** @brief 只向Sender下发的配置详情，包含密钥链种子。 */
@@ -182,6 +193,158 @@ private:
     bool                        m_bAccepted;
     std::string                 m_strErrorCode;
     std::string                 m_strMessage;
+};
+
+/** @brief 独立于算法配置下发给Sender的阶段6手动文本载荷。 */
+class TextPayloadControlDetails final
+{
+public:
+    TextPayloadControlDetails(
+        std::string strRequestId,
+        std::uint64_t u64ChainId,
+        std::string strUtf8Text
+    );
+
+    const std::string& strRequestId() const noexcept;
+    std::uint64_t u64ChainId() const noexcept;
+    const std::string& strUtf8Text() const noexcept;
+
+private:
+    std::string   m_strRequestId;
+    std::uint64_t m_u64ChainId;
+    std::string   m_strUtf8Text;
+};
+
+enum class AuthenticationRoundCommand
+{
+    Start,
+    Pause,
+    Resume,
+    Stop
+};
+
+/**
+ * @brief 一轮认证的统一控制命令。
+ *
+ * Pause在指定逻辑间隔结束后生效；Resume从指定逻辑间隔和新的未来时间继续，
+ * 避免直接冻结系统时钟导致TESLA披露时间线含糊。
+ */
+class AuthenticationRoundCommandControlDetails final
+{
+public:
+    AuthenticationRoundCommandControlDetails(
+        std::string strRequestId,
+        std::string strRoundId,
+        AuthenticationRoundCommand cmdCommand,
+        std::uint64_t u64ExecutionTimestampMilliseconds,
+        std::uint32_t u32LogicalIntervalIndex
+    );
+
+    const std::string& strRequestId() const noexcept;
+    const std::string& strRoundId() const noexcept;
+    AuthenticationRoundCommand cmdCommand() const noexcept;
+    std::uint64_t u64ExecutionTimestampMilliseconds() const noexcept;
+    std::uint32_t u32LogicalIntervalIndex() const noexcept;
+
+private:
+    std::string                m_strRequestId;
+    std::string                m_strRoundId;
+    AuthenticationRoundCommand m_cmdCommand;
+    std::uint64_t              m_u64ExecutionTimestampMilliseconds;
+    std::uint32_t              m_u32LogicalIntervalIndex;
+};
+
+/** @brief 节点对开始、暂停、继续或停止命令的明确接收结果。 */
+class AuthenticationRoundAcknowledgementControlDetails final
+{
+public:
+    AuthenticationRoundAcknowledgementControlDetails(
+        std::string strRequestId,
+        std::string strRoundId,
+        AuthenticationRoundCommand cmdCommand,
+        bool bAccepted,
+        std::string strErrorCode,
+        std::string strMessage
+    );
+
+    const std::string& strRequestId() const noexcept;
+    const std::string& strRoundId() const noexcept;
+    AuthenticationRoundCommand cmdCommand() const noexcept;
+    bool bAccepted() const noexcept;
+    const std::string& strErrorCode() const noexcept;
+    const std::string& strMessage() const noexcept;
+
+private:
+    std::string                m_strRequestId;
+    std::string                m_strRoundId;
+    AuthenticationRoundCommand m_cmdCommand;
+    bool                       m_bAccepted;
+    std::string                m_strErrorCode;
+    std::string                m_strMessage;
+};
+
+enum class AuthenticationRoundResultRole
+{
+    Sender,
+    Receiver
+};
+
+enum class AuthenticationRoundResultStatus
+{
+    Completed,
+    AuthenticationFailed,
+    VerificationTimeout,
+    InvalidSchedulingOverrun,
+    Stopped,
+    ProtocolIncomplete,
+    TimeUnsynchronized
+};
+
+/** @brief Sender或Receiver通过原TCP连接上报的一轮阶段6最终结果。 */
+class AuthenticationRoundResultControlDetails final
+{
+public:
+    AuthenticationRoundResultControlDetails(
+        std::string strRoundId,
+        std::string strSenderId,
+        std::uint64_t u64ChainId,
+        AuthenticationRoundResultRole roleResult,
+        AuthenticationRoundResultStatus statusResult,
+        std::uint32_t u32ExpectedPacketCount,
+        std::uint32_t u32ReceivedPacketCount,
+        std::uint32_t u32AuthenticatedPacketCount,
+        std::uint32_t u32FailedPacketCount,
+        std::uint32_t u32MissingPacketCount,
+        std::string strRecoveredText,
+        std::string strMessage
+    );
+
+    const std::string& strRoundId() const noexcept;
+    const std::string& strSenderId() const noexcept;
+    std::uint64_t u64ChainId() const noexcept;
+    AuthenticationRoundResultRole roleResult() const noexcept;
+    AuthenticationRoundResultStatus statusResult() const noexcept;
+    std::uint32_t u32ExpectedPacketCount() const noexcept;
+    std::uint32_t u32ReceivedPacketCount() const noexcept;
+    std::uint32_t u32AuthenticatedPacketCount() const noexcept;
+    std::uint32_t u32FailedPacketCount() const noexcept;
+    std::uint32_t u32MissingPacketCount() const noexcept;
+    const std::string& strRecoveredText() const noexcept;
+    const std::string& strMessage() const noexcept;
+
+private:
+    std::string                     m_strRoundId;
+    std::string                     m_strSenderId;
+    std::uint64_t                   m_u64ChainId;
+    AuthenticationRoundResultRole   m_roleResult;
+    AuthenticationRoundResultStatus m_statusResult;
+    std::uint32_t                   m_u32ExpectedPacketCount;
+    std::uint32_t                   m_u32ReceivedPacketCount;
+    std::uint32_t                   m_u32AuthenticatedPacketCount;
+    std::uint32_t                   m_u32FailedPacketCount;
+    std::uint32_t                   m_u32MissingPacketCount;
+    std::string                     m_strRecoveredText;
+    std::string                     m_strMessage;
 };
 
 /**

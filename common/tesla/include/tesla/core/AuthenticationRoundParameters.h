@@ -15,6 +15,12 @@ enum class TeslaAuthenticationMode
     Improved
 };
 
+enum class AuthenticationPayloadMode
+{
+    Text,
+    File
+};
+
 /** @brief 保存改进TESLA分组和检测门限，并预先验证KS+RS矩阵可构造。 */
 class ImprovedTeslaParameters final
 {
@@ -50,7 +56,8 @@ public:
         std::uint32_t u32DisclosureDelay,
         std::uint32_t u32IntervalMilliseconds,
         std::uint64_t u64StartTimestampMilliseconds,
-        std::optional<ImprovedTeslaParameters> optImprovedParameters = std::nullopt
+        std::optional<ImprovedTeslaParameters> optImprovedParameters = std::nullopt,
+        AuthenticationPayloadMode modePayload = AuthenticationPayloadMode::Text
     );
 
     crypto::CryptoAlgorithm algCryptoAlgorithm() const noexcept;
@@ -62,6 +69,7 @@ public:
     std::uint64_t u64StartTimestampMilliseconds() const noexcept;
     std::size_t nDataIntervalCount() const noexcept;
     std::uint32_t u32ChainLength() const noexcept;
+    AuthenticationPayloadMode modePayload() const noexcept;
     const std::optional<ImprovedTeslaParameters>& optImprovedParameters() const noexcept;
 
 private:
@@ -74,5 +82,6 @@ private:
     std::uint64_t                           m_u64StartTimestampMilliseconds;
     std::size_t                             m_nDataIntervalCount;
     std::optional<ImprovedTeslaParameters>  m_optImprovedParameters;
+    AuthenticationPayloadMode              m_modePayload;
 };
 }

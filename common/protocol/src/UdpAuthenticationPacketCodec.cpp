@@ -10,7 +10,7 @@ namespace tesla::protocol
 {
 namespace
 {
-UdpAuthenticationPacketDecodeResult errCreate(
+ProtocolDecodeError errCreate(
     ProtocolDecodeErrorCode errCode,
     const std::string& strMessage
 )
@@ -156,6 +156,39 @@ ByteBuffer UdpAuthenticationPacketCodec::vecEncode(
     }
 
     return vecDatagram;
+}
+
+UdpAuthenticationPacketHeaderDecodeResult
+UdpAuthenticationPacketCodec::resDecodeHeader(const ByteBuffer& vecDatagram)
+{
+    if (vecDatagram.size() < FIXED_HEADER_SIZE)
+    {
+        return errCreate(
+            ProtocolDecodeErrorCode::DatagramTooShort,
+            "UDP authentication datagram is shorter than its fixed header"
+        );
+    }
+
+    try
+    {
+        detail::BinaryReader rdrDatagram(vecDatagram);
+        // 有状态读取必须显式排序，不能依赖函数实参的求值顺序。
+        const std::uint64_t u64ChainId = rdrDatagram.u64Read();
+        const std::uint32_t u32IntervalIndex = rdrDatagram.u32Read();
+        const std::uint32_t u32PacketIndex = rdrDatagram.u32Read();
+        return UdpAuthenticationPacketHeader(
+            u64ChainId,
+            u32IntervalIndex,
+            u32PacketIndex
+        );
+    }
+    catch (const std::exception& exError)
+    {
+        return errCreate(
+            ProtocolDecodeErrorCode::InvalidAuthenticationFields,
+            exError.what()
+        );
+    }
 }
 
 UdpAuthenticationPacketDecodeResult UdpAuthenticationPacketCodec::resDecode(

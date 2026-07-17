@@ -41,7 +41,7 @@ UavMonitorMainWindow::UavMonitorMainWindow(
     QWidget* pParent
 )
     : QMainWindow(pParent),
-      m_ctlNetwork(std::chrono::milliseconds(3000), this),
+      m_ctlNetwork(std::chrono::milliseconds(3000), nullptr),
       m_pHostEdit(nullptr),
       m_pPortSpin(nullptr),
       m_pConnectionValue(nullptr),

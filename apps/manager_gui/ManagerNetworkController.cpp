@@ -428,6 +428,26 @@ void ManagerNetworkController::refreshStatus()
     }
 }
 
+bool ManagerNetworkController::bSendNodeControl(
+    const QString& strEndpointKey,
+    const NodeControlMessage& msgMessage
+)
+{
+    const std::shared_ptr<EndpointState> ptrEndpoint =
+        m_mapEndpoints.value(strEndpointKey);
+    if (!ptrEndpoint
+        || ptrEndpoint->roleNode == NodeRole::Attacker
+        || ptrEndpoint->stateConnection != ManagerConnectionState::Connected)
+    {
+        return false;
+    }
+
+    return bSendJsonFrame(
+        ptrEndpoint->pSocket,
+        NodeControlJsonCodec::strEncode(msgMessage)
+    );
+}
+
 QVector<ManagerNodeSnapshot> ManagerNetworkController::vecNodeSnapshots() const
 {
     QVector<ManagerNodeSnapshot> vecSnapshots;
@@ -705,6 +725,15 @@ void ManagerNetworkController::processNodeControlFrame(
     }
 
     const NodeControlMessage& msgMessage = std::get<NodeControlMessage>(resMessage);
+    if (msgMessage.typeMessage() != NodeControlMessageType::StatusResponse
+        && msgMessage.typeMessage() != NodeControlMessageType::Pong)
+    {
+        emit nodeControlJsonReceived(
+            ptrEndpoint->strKey,
+            QString::fromStdString(strJson)
+        );
+    }
+
     if (msgMessage.typeMessage() == NodeControlMessageType::StatusResponse)
     {
         const StatusResponseControlDetails& detStatus =

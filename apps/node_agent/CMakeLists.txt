@@ -1,8 +1,8 @@
 set(TESLA_NODE_AGENT_HEADERS
     include/tesla/node_agent/NetworkInterfaceSelector.h
-    include/tesla/node_agent/NodeAuthenticationConfigController.h
     include/tesla/node_agent/NodeAgentConfig.h
     include/tesla/node_agent/NodeAgentService.h
+    include/tesla/node_agent/SystemTimeSynchronization.h
     include/tesla/node_agent/TcpManagementServer.h
     include/tesla/node_agent/UdpDiscoveryService.h
     include/tesla/node_agent/UdpMulticastChannel.h
@@ -10,8 +10,8 @@ set(TESLA_NODE_AGENT_HEADERS
 
 set(TESLA_NODE_AGENT_POSIX_SOURCES
     src/NetworkInterfaceSelector.cpp
-    src/NodeAuthenticationConfigController.cpp
     src/NodeAgentService.cpp
+    src/SystemTimeSynchronization.cpp
     src/TcpManagementServer.cpp
     src/UdpDiscoveryService.cpp
     src/UdpMulticastChannel.cpp

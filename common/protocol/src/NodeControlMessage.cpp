@@ -158,11 +158,45 @@ NodeControlMessageType NodeControlMessage::typeMessage() const noexcept
         return NodeControlMessageType::ReceiverAuthenticationContexts;
     }
 
+    if (std::holds_alternative<TextPayloadControlDetails>(m_varDetails))
+    {
+        return NodeControlMessageType::TextPayloadConfig;
+    }
+
     if (std::holds_alternative<AuthenticationConfigAcknowledgementControlDetails>(
             m_varDetails
         ))
     {
         return NodeControlMessageType::AuthenticationConfigAcknowledgement;
+    }
+
+    if (std::holds_alternative<AuthenticationRoundCommandControlDetails>(m_varDetails))
+    {
+        switch (std::get<AuthenticationRoundCommandControlDetails>(
+            m_varDetails
+        ).cmdCommand())
+        {
+        case AuthenticationRoundCommand::Start:
+            return NodeControlMessageType::RoundStart;
+        case AuthenticationRoundCommand::Pause:
+            return NodeControlMessageType::RoundPause;
+        case AuthenticationRoundCommand::Resume:
+            return NodeControlMessageType::RoundResume;
+        case AuthenticationRoundCommand::Stop:
+            return NodeControlMessageType::RoundStop;
+        }
+    }
+
+    if (std::holds_alternative<AuthenticationRoundAcknowledgementControlDetails>(
+            m_varDetails
+        ))
+    {
+        return NodeControlMessageType::RoundCommandAcknowledgement;
+    }
+
+    if (std::holds_alternative<AuthenticationRoundResultControlDetails>(m_varDetails))
+    {
+        return NodeControlMessageType::RoundResult;
     }
 
     return NodeControlMessageType::ErrorResponse;

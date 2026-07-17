@@ -267,6 +267,27 @@ void UavMonitorNetworkController::processTcpData()
                     QString::fromStdString(detError.strMessage())
                 ));
         }
+        else if (msgMessage.typeMessage() == NodeControlMessageType::RoundResult)
+        {
+            const AuthenticationRoundResultControlDetails& detResult =
+                std::get<AuthenticationRoundResultControlDetails>(
+                    msgMessage.varDetails()
+                );
+            emit logMessage(
+                QStringLiteral(
+                    "认证结果 %1 / chainId=%2：通过 %3/%4，失败 %5，"
+                    "缺失 %6，恢复文本“%7”；%8"
+                )
+                    .arg(QString::fromStdString(detResult.strSenderId()))
+                    .arg(detResult.u64ChainId())
+                    .arg(detResult.u32AuthenticatedPacketCount())
+                    .arg(detResult.u32ExpectedPacketCount())
+                    .arg(detResult.u32FailedPacketCount())
+                    .arg(detResult.u32MissingPacketCount())
+                    .arg(QString::fromStdString(detResult.strRecoveredText()))
+                    .arg(QString::fromStdString(detResult.strMessage()))
+            );
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tesla/protocol/NodeControlMessage.h"
 #include "tesla/protocol/NodeDiscoveryMessage.h"
 
 #include <QHash>
@@ -93,11 +94,19 @@ public:
     void connectAll();
     void disconnectAll();
     void refreshStatus();
+    bool bSendNodeControl(
+        const QString& strEndpointKey,
+        const tesla::protocol::NodeControlMessage& msgMessage
+    );
 
     QVector<ManagerNodeSnapshot> vecNodeSnapshots() const;
 
 signals:
     void nodesChanged();
+    void nodeControlJsonReceived(
+        const QString& strEndpointKey,
+        const QString& strJson
+    );
     void logMessage(const QString& strMessage);
 
 private:

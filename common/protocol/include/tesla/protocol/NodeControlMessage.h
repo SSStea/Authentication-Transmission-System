@@ -23,7 +23,14 @@ enum class NodeControlMessageType
     StatusResponse,
     SenderAuthenticationConfig,
     ReceiverAuthenticationContexts,
+    TextPayloadConfig,
     AuthenticationConfigAcknowledgement,
+    RoundStart,
+    RoundPause,
+    RoundResume,
+    RoundStop,
+    RoundCommandAcknowledgement,
+    RoundResult,
     ErrorResponse
 };
 
@@ -105,7 +112,11 @@ using NodeControlMessageDetails = std::variant<
     StatusResponseControlDetails,
     SenderAuthenticationConfigControlDetails,
     ReceiverAuthenticationContextsControlDetails,
+    TextPayloadControlDetails,
     AuthenticationConfigAcknowledgementControlDetails,
+    AuthenticationRoundCommandControlDetails,
+    AuthenticationRoundAcknowledgementControlDetails,
+    AuthenticationRoundResultControlDetails,
     ErrorResponseControlDetails
 >;
 

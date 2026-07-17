@@ -1,18 +1,55 @@
 #include "tesla/node_agent/NodeAgentService.h"
 
+#include "tesla/node_agent/SystemTimeSynchronization.h"
+
+#include <chrono>
 #include <stdexcept>
 #include <utility>
-#include <variant>
 
 namespace tesla::node_agent
 {
+namespace
+{
+std::uint64_t u64NowMilliseconds()
+{
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count()
+    );
+}
+}
+
 NodeAgentService::NodeAgentService(
     NodeAgentConfig cfgConfig,
-    UdpMulticastChannel::DatagramHandler fnDatagramHandler
+    UdpMulticastChannel::DatagramHandler fnDatagramHandler,
+    core::AuthenticationNodeRuntime::TimeSynchronizationProvider
+        fnTimeSynchronizationProvider
 )
     : m_cfgConfig(std::move(cfgConfig)),
       m_fnExternalDatagramHandler(std::move(fnDatagramHandler)),
-      m_ctlAuthenticationConfig(m_cfgConfig.strNodeName()),
+      m_chnMulticast(
+          m_cfgConfig.strBindAddress(),
+          m_cfgConfig.strMulticastAddress(),
+          m_cfgConfig.u16MulticastPort(),
+          [this](
+              const std::string& strSourceAddress,
+              const protocol::ByteBuffer& vecDatagram
+          )
+          {
+              ++m_nReceivedDatagramCount;
+              m_runAuthentication.bHandleDatagram(
+                  strSourceAddress,
+                  vecDatagram,
+                  u64NowMilliseconds()
+              );
+
+              if (m_fnExternalDatagramHandler)
+              {
+                  m_fnExternalDatagramHandler(strSourceAddress, vecDatagram);
+              }
+          }
+      ),
       m_srvManagement(
           m_cfgConfig.strBindAddress(),
           m_cfgConfig.u16ManagementPort(),
@@ -20,7 +57,7 @@ NodeAgentService::NodeAgentService(
           [this]()
           {
               return std::make_pair(
-                  m_bSenderRunning.load(),
+                  m_runAuthentication.bSenderRunning(),
                   m_bReceiverRunning.load()
               );
           },
@@ -29,27 +66,30 @@ NodeAgentService::NodeAgentService(
               const protocol::NodeControlMessage& msgMessage
           )
           {
-              protocol::NodeControlMessage msgResponse =
-                  m_ctlAuthenticationConfig.msgHandle(roleClient, msgMessage);
-
-              if (msgResponse.typeMessage()
-                  == protocol::NodeControlMessageType::
-                      AuthenticationConfigAcknowledgement)
-              {
-                  const protocol::AuthenticationConfigAcknowledgementControlDetails&
-                      detAcknowledgement = std::get<
-                          protocol::AuthenticationConfigAcknowledgementControlDetails
-                      >(msgResponse.varDetails());
-                  if (detAcknowledgement.bAccepted()
-                      && detAcknowledgement.targetConfig()
-                          == protocol::AuthenticationConfigTarget::Sender)
-                  {
-                      m_bSenderRunning = true;
-                  }
-              }
-
-              return msgResponse;
+              return m_runAuthentication.msgHandleControl(
+                  roleClient,
+                  msgMessage
+              );
           }
+      ),
+      m_runAuthentication(
+          m_cfgConfig.strNodeName(),
+          [this](const protocol::ByteBuffer& vecDatagram)
+          {
+              return m_chnMulticast.bSend(vecDatagram);
+          },
+          [this](const protocol::NodeControlMessage& msgMessage)
+          {
+              m_srvManagement.broadcastControlMessage(msgMessage);
+          },
+          fnTimeSynchronizationProvider
+              ? std::move(fnTimeSynchronizationProvider)
+              : core::AuthenticationNodeRuntime::TimeSynchronizationProvider(
+                  []()
+                  {
+                      return SystemTimeSynchronization::stsQuery();
+                  }
+              )
       ),
       m_srvDiscovery(
           m_cfgConfig.strBindAddress(),
@@ -61,25 +101,9 @@ NodeAgentService::NodeAgentService(
           [this]()
           {
               return std::make_pair(
-                  m_bSenderRunning.load(),
+                  m_runAuthentication.bSenderRunning(),
                   m_bReceiverRunning.load()
               );
-          }
-      ),
-      m_chnMulticast(
-          m_cfgConfig.strBindAddress(),
-          m_cfgConfig.strMulticastAddress(),
-          m_cfgConfig.u16MulticastPort(),
-          [this](
-              const std::string& strSourceAddress,
-              const protocol::ByteBuffer& vecDatagram
-          )
-          {
-              ++m_nReceivedDatagramCount;
-              if (m_fnExternalDatagramHandler)
-              {
-                  m_fnExternalDatagramHandler(strSourceAddress, vecDatagram);
-              }
           }
       )
 {
@@ -116,9 +140,9 @@ void NodeAgentService::start()
 void NodeAgentService::stop() noexcept
 {
     m_bRunning = false;
+    m_runAuthentication.stop();
     m_srvDiscovery.stop();
     m_srvManagement.stop();
-    m_bSenderRunning = false;
     m_bReceiverRunning = false;
     m_chnMulticast.stop();
 }
@@ -142,18 +166,18 @@ std::size_t NodeAgentService::nReceivedDatagramCount() const noexcept
 
 bool NodeAgentService::bHasSenderAuthenticationContext() const
 {
-    return m_ctlAuthenticationConfig.bHasSenderContext();
+    return m_runAuthentication.bHasSenderContext();
 }
 
 std::optional<std::uint64_t>
 NodeAgentService::optSenderAuthenticationChainId() const
 {
-    return m_ctlAuthenticationConfig.optSenderChainId();
+    return m_runAuthentication.optSenderChainId();
 }
 
 std::size_t NodeAgentService::nReceiverAuthenticationContextCount() const
 {
-    return m_ctlAuthenticationConfig.nReceiverContextCount();
+    return m_runAuthentication.nReceiverContextCount();
 }
 
 core::ReceiverAuthenticationContextLookupResult
@@ -162,7 +186,7 @@ NodeAgentService::resFindReceiverAuthenticationContext(
     std::uint64_t u64ChainId
 ) const
 {
-    return m_ctlAuthenticationConfig.resFindReceiverContext(
+    return m_runAuthentication.resFindReceiverContext(
         strSourceIpAddress,
         u64ChainId
     );

@@ -41,6 +41,9 @@ public:
     void stop() noexcept;
     bool bIsRunning() const noexcept;
     std::size_t nConnectedClientCount() const noexcept;
+    void broadcastControlMessage(
+        const protocol::NodeControlMessage& msgMessage
+    ) const noexcept;
 
 private:
     struct ClientConnection;

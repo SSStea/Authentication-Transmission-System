@@ -91,7 +91,8 @@ AuthenticationRoundControlParameters::AuthenticationRoundControlParameters(
     std::uint32_t u32IntervalMilliseconds,
     std::uint64_t u64StartTimestampMilliseconds,
     std::uint32_t u32ChainLength,
-    std::optional<ImprovedTeslaControlParameters> optImprovedParameters
+    std::optional<ImprovedTeslaControlParameters> optImprovedParameters,
+    AuthenticationPayloadMode modePayload
 )
     : m_algCryptoAlgorithm(algCryptoAlgorithm),
       m_modeAuthentication(modeAuthentication),
@@ -101,7 +102,8 @@ AuthenticationRoundControlParameters::AuthenticationRoundControlParameters(
       m_u32IntervalMilliseconds(u32IntervalMilliseconds),
       m_u64StartTimestampMilliseconds(u64StartTimestampMilliseconds),
       m_u32ChainLength(u32ChainLength),
-      m_optImprovedParameters(std::move(optImprovedParameters))
+      m_optImprovedParameters(std::move(optImprovedParameters)),
+      m_modePayload(modePayload)
 {
     if (m_u32TotalPacketCount == 0
         || m_u32PacketsPerInterval == 0
@@ -167,6 +169,12 @@ AuthenticationRoundControlParameters::u64StartTimestampMilliseconds() const noex
 std::uint32_t AuthenticationRoundControlParameters::u32ChainLength() const noexcept
 {
     return m_u32ChainLength;
+}
+
+AuthenticationPayloadMode
+AuthenticationRoundControlParameters::modePayload() const noexcept
+{
+    return m_modePayload;
 }
 
 const std::optional<ImprovedTeslaControlParameters>&
@@ -368,6 +376,305 @@ AuthenticationConfigAcknowledgementControlDetails::strErrorCode() const noexcept
 
 const std::string&
 AuthenticationConfigAcknowledgementControlDetails::strMessage() const noexcept
+{
+    return m_strMessage;
+}
+
+TextPayloadControlDetails::TextPayloadControlDetails(
+    std::string strRequestId,
+    std::uint64_t u64ChainId,
+    std::string strUtf8Text
+)
+    : m_strRequestId(std::move(strRequestId)),
+      m_u64ChainId(u64ChainId),
+      m_strUtf8Text(std::move(strUtf8Text))
+{
+    validateText(m_strRequestId, "Control request ID");
+
+    if (m_u64ChainId == 0)
+    {
+        throw std::invalid_argument("Text payload chain ID must not be zero");
+    }
+
+    if (m_strUtf8Text.empty() || m_strUtf8Text.size() > BINARY_BLOCK_SIZE)
+    {
+        throw std::invalid_argument("Text payload must contain between 1 and 32 UTF-8 bytes");
+    }
+
+    if (m_strUtf8Text.find('\0') != std::string::npos)
+    {
+        throw std::invalid_argument("Text payload must not contain a zero byte");
+    }
+}
+
+const std::string& TextPayloadControlDetails::strRequestId() const noexcept
+{
+    return m_strRequestId;
+}
+
+std::uint64_t TextPayloadControlDetails::u64ChainId() const noexcept
+{
+    return m_u64ChainId;
+}
+
+const std::string& TextPayloadControlDetails::strUtf8Text() const noexcept
+{
+    return m_strUtf8Text;
+}
+
+AuthenticationRoundCommandControlDetails::
+AuthenticationRoundCommandControlDetails(
+    std::string strRequestId,
+    std::string strRoundId,
+    AuthenticationRoundCommand cmdCommand,
+    std::uint64_t u64ExecutionTimestampMilliseconds,
+    std::uint32_t u32LogicalIntervalIndex
+)
+    : m_strRequestId(std::move(strRequestId)),
+      m_strRoundId(std::move(strRoundId)),
+      m_cmdCommand(cmdCommand),
+      m_u64ExecutionTimestampMilliseconds(u64ExecutionTimestampMilliseconds),
+      m_u32LogicalIntervalIndex(u32LogicalIntervalIndex)
+{
+    validateText(m_strRequestId, "Control request ID");
+    validateText(m_strRoundId, "Authentication round ID");
+
+    if (m_cmdCommand == AuthenticationRoundCommand::Stop)
+    {
+        if (m_u64ExecutionTimestampMilliseconds != 0
+            || m_u32LogicalIntervalIndex != 0)
+        {
+            throw std::invalid_argument(
+                "Round stop command must not contain schedule fields"
+            );
+        }
+
+        return;
+    }
+
+    if (m_u64ExecutionTimestampMilliseconds == 0
+        || m_u32LogicalIntervalIndex == 0)
+    {
+        throw std::invalid_argument(
+            "Scheduled round command requires a timestamp and logical interval"
+        );
+    }
+
+    if (m_cmdCommand == AuthenticationRoundCommand::Start
+        && m_u32LogicalIntervalIndex != 1)
+    {
+        throw std::invalid_argument("Round start command must begin at interval one");
+    }
+}
+
+const std::string&
+AuthenticationRoundCommandControlDetails::strRequestId() const noexcept
+{
+    return m_strRequestId;
+}
+
+const std::string&
+AuthenticationRoundCommandControlDetails::strRoundId() const noexcept
+{
+    return m_strRoundId;
+}
+
+AuthenticationRoundCommand
+AuthenticationRoundCommandControlDetails::cmdCommand() const noexcept
+{
+    return m_cmdCommand;
+}
+
+std::uint64_t AuthenticationRoundCommandControlDetails::
+u64ExecutionTimestampMilliseconds() const noexcept
+{
+    return m_u64ExecutionTimestampMilliseconds;
+}
+
+std::uint32_t AuthenticationRoundCommandControlDetails::
+u32LogicalIntervalIndex() const noexcept
+{
+    return m_u32LogicalIntervalIndex;
+}
+
+AuthenticationRoundAcknowledgementControlDetails::
+AuthenticationRoundAcknowledgementControlDetails(
+    std::string strRequestId,
+    std::string strRoundId,
+    AuthenticationRoundCommand cmdCommand,
+    bool bAccepted,
+    std::string strErrorCode,
+    std::string strMessage
+)
+    : m_strRequestId(std::move(strRequestId)),
+      m_strRoundId(std::move(strRoundId)),
+      m_cmdCommand(cmdCommand),
+      m_bAccepted(bAccepted),
+      m_strErrorCode(std::move(strErrorCode)),
+      m_strMessage(std::move(strMessage))
+{
+    validateText(m_strRequestId, "Control request ID");
+    validateText(m_strRoundId, "Authentication round ID");
+    validateText(m_strErrorCode, "Round command error code", m_bAccepted);
+    validateText(m_strMessage, "Round command acknowledgement message");
+
+    if (m_bAccepted && !m_strErrorCode.empty())
+    {
+        throw std::invalid_argument(
+            "Accepted round command must not contain an error code"
+        );
+    }
+}
+
+const std::string&
+AuthenticationRoundAcknowledgementControlDetails::strRequestId() const noexcept
+{
+    return m_strRequestId;
+}
+
+const std::string&
+AuthenticationRoundAcknowledgementControlDetails::strRoundId() const noexcept
+{
+    return m_strRoundId;
+}
+
+AuthenticationRoundCommand
+AuthenticationRoundAcknowledgementControlDetails::cmdCommand() const noexcept
+{
+    return m_cmdCommand;
+}
+
+bool AuthenticationRoundAcknowledgementControlDetails::bAccepted() const noexcept
+{
+    return m_bAccepted;
+}
+
+const std::string&
+AuthenticationRoundAcknowledgementControlDetails::strErrorCode() const noexcept
+{
+    return m_strErrorCode;
+}
+
+const std::string&
+AuthenticationRoundAcknowledgementControlDetails::strMessage() const noexcept
+{
+    return m_strMessage;
+}
+
+AuthenticationRoundResultControlDetails::
+AuthenticationRoundResultControlDetails(
+    std::string strRoundId,
+    std::string strSenderId,
+    std::uint64_t u64ChainId,
+    AuthenticationRoundResultRole roleResult,
+    AuthenticationRoundResultStatus statusResult,
+    std::uint32_t u32ExpectedPacketCount,
+    std::uint32_t u32ReceivedPacketCount,
+    std::uint32_t u32AuthenticatedPacketCount,
+    std::uint32_t u32FailedPacketCount,
+    std::uint32_t u32MissingPacketCount,
+    std::string strRecoveredText,
+    std::string strMessage
+)
+    : m_strRoundId(std::move(strRoundId)),
+      m_strSenderId(std::move(strSenderId)),
+      m_u64ChainId(u64ChainId),
+      m_roleResult(roleResult),
+      m_statusResult(statusResult),
+      m_u32ExpectedPacketCount(u32ExpectedPacketCount),
+      m_u32ReceivedPacketCount(u32ReceivedPacketCount),
+      m_u32AuthenticatedPacketCount(u32AuthenticatedPacketCount),
+      m_u32FailedPacketCount(u32FailedPacketCount),
+      m_u32MissingPacketCount(u32MissingPacketCount),
+      m_strRecoveredText(std::move(strRecoveredText)),
+      m_strMessage(std::move(strMessage))
+{
+    validateText(m_strRoundId, "Authentication round ID");
+    validateText(m_strSenderId, "Authentication result sender ID");
+    validateText(m_strRecoveredText, "Recovered text", true);
+    validateText(m_strMessage, "Authentication result message");
+
+    if (m_u64ChainId == 0 || m_u32ExpectedPacketCount == 0)
+    {
+        throw std::invalid_argument("Authentication round result identity is invalid");
+    }
+
+    if (m_u32ReceivedPacketCount > m_u32ExpectedPacketCount
+        || m_u32AuthenticatedPacketCount > m_u32ReceivedPacketCount
+        || m_u32FailedPacketCount > m_u32ReceivedPacketCount
+        || m_u32MissingPacketCount > m_u32ExpectedPacketCount)
+    {
+        throw std::invalid_argument("Authentication round result counts are inconsistent");
+    }
+}
+
+const std::string&
+AuthenticationRoundResultControlDetails::strRoundId() const noexcept
+{
+    return m_strRoundId;
+}
+
+const std::string&
+AuthenticationRoundResultControlDetails::strSenderId() const noexcept
+{
+    return m_strSenderId;
+}
+
+std::uint64_t AuthenticationRoundResultControlDetails::u64ChainId() const noexcept
+{
+    return m_u64ChainId;
+}
+
+AuthenticationRoundResultRole
+AuthenticationRoundResultControlDetails::roleResult() const noexcept
+{
+    return m_roleResult;
+}
+
+AuthenticationRoundResultStatus
+AuthenticationRoundResultControlDetails::statusResult() const noexcept
+{
+    return m_statusResult;
+}
+
+std::uint32_t
+AuthenticationRoundResultControlDetails::u32ExpectedPacketCount() const noexcept
+{
+    return m_u32ExpectedPacketCount;
+}
+
+std::uint32_t
+AuthenticationRoundResultControlDetails::u32ReceivedPacketCount() const noexcept
+{
+    return m_u32ReceivedPacketCount;
+}
+
+std::uint32_t AuthenticationRoundResultControlDetails::
+u32AuthenticatedPacketCount() const noexcept
+{
+    return m_u32AuthenticatedPacketCount;
+}
+
+std::uint32_t
+AuthenticationRoundResultControlDetails::u32FailedPacketCount() const noexcept
+{
+    return m_u32FailedPacketCount;
+}
+
+std::uint32_t
+AuthenticationRoundResultControlDetails::u32MissingPacketCount() const noexcept
+{
+    return m_u32MissingPacketCount;
+}
+
+const std::string&
+AuthenticationRoundResultControlDetails::strRecoveredText() const noexcept
+{
+    return m_strRecoveredText;
+}
+
+const std::string&
+AuthenticationRoundResultControlDetails::strMessage() const noexcept
 {
     return m_strMessage;
 }

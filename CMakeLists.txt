@@ -42,8 +42,8 @@ endif()
 
 add_subdirectory(common/protocol)
 add_subdirectory(common/crypto)
-add_subdirectory(common/tesla)
 add_subdirectory(common/workload)
+add_subdirectory(common/tesla)
 add_subdirectory(common/metrics)
 
 add_subdirectory(apps/node_agent)
