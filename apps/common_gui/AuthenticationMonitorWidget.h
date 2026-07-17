@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tesla/metrics/AuthenticationMetrics.h"
 #include "tesla/protocol/MonitorControl.h"
 
 #include <QWidget>
@@ -24,6 +25,10 @@ public:
         std::vector<protocol::PacketObservationControlDetails> vecPackets,
         std::vector<protocol::PacketFailureControlDetails> vecFailures,
         std::vector<protocol::DosSummaryControlDetails> vecDosSummaries
+    );
+    /** @brief 更新节点生成的逐轮归档记录，供CSV/JSON实验数据导出。 */
+    void setMetricSnapshots(
+        std::vector<metrics::AuthenticationMetricRecord> vecMetrics
     );
 
 private:

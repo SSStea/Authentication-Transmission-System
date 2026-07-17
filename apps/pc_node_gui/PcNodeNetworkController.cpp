@@ -488,6 +488,14 @@ PcNodeNetworkController::vecDosSummarySnapshot() const
         : std::vector<tesla::protocol::DosSummaryControlDetails>();
 }
 
+std::vector<tesla::metrics::AuthenticationMetricRecord>
+PcNodeNetworkController::vecMetricSnapshot() const
+{
+    return m_ptrAuthenticationRuntime
+        ? m_ptrAuthenticationRuntime->vecMetricSnapshot()
+        : std::vector<tesla::metrics::AuthenticationMetricRecord>();
+}
+
 std::optional<tesla::core::LocalSenderKeyChainSnapshot>
 PcNodeNetworkController::optLocalKeyChainSnapshot() const
 {
@@ -916,6 +924,8 @@ bool PcNodeNetworkController::bIsAuthenticationControl(
     return typeMessage == NodeControlMessageType::SenderAuthenticationConfig
         || typeMessage == NodeControlMessageType::ReceiverAuthenticationContexts
         || typeMessage == NodeControlMessageType::TextPayloadConfig
+        || typeMessage == NodeControlMessageType::FaultInjectionConfig
+        || typeMessage == NodeControlMessageType::AttackSourceMapping
         || typeMessage == NodeControlMessageType::RoundStart
         || typeMessage == NodeControlMessageType::RoundPause
         || typeMessage == NodeControlMessageType::RoundResume
@@ -1092,6 +1102,8 @@ void PcNodeNetworkController::processAuthenticationRuntimeEvent(
             .arg(detResult.u32MissingPacketCount())
             .arg(strPayloadStatus)
             .arg(QString::fromStdString(detResult.strMessage())));
+        // 最终结果到达前逐轮归档已写入运行时指标存储，通知界面刷新导出快照。
+        emit authenticationObservationsChanged();
     }
     emit stateChanged();
 }

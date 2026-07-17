@@ -1023,6 +1023,10 @@ bool TcpManagementServer::bHandleFrame(
         || msgMessage.typeMessage()
             == protocol::NodeControlMessageType::TextPayloadConfig
         || msgMessage.typeMessage()
+            == protocol::NodeControlMessageType::FaultInjectionConfig
+        || msgMessage.typeMessage()
+            == protocol::NodeControlMessageType::AttackSourceMapping
+        || msgMessage.typeMessage()
             == protocol::NodeControlMessageType::RoundStart
         || msgMessage.typeMessage()
             == protocol::NodeControlMessageType::RoundPause

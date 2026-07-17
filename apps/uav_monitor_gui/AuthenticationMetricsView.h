@@ -32,12 +32,14 @@ private:
         qreal dMaximumX,
         qreal dMaximumY
     );
+    /** @brief 导出当前监视端保留的真实指标记录，便于离线复核。 */
+    void exportRecords(bool bJson) const;
 
-    QWidget*    m_pComputationPage;
-    QWidget*    m_pEnergyPage;
-    QLabel*     m_pComputationSummary;
-    QLabel*     m_pHardwareSummary;
-    QLabel*     m_pEnergySummary;
+    QWidget*     m_pComputationPage;
+    QWidget*     m_pEnergyPage;
+    QLabel*      m_pComputationSummary;
+    QLabel*      m_pHardwareSummary;
+    QLabel*      m_pEnergySummary;
     QLineSeries* m_pNativeVerifySeries;
     QLineSeries* m_pFastVerifySeries;
     QLineSeries* m_pFallbackVerifySeries;
@@ -51,4 +53,5 @@ private:
     QValueAxis*  m_pComputationYAxis;
     QValueAxis*  m_pEnergyXAxis;
     QValueAxis*  m_pEnergyYAxis;
+    std::vector<tesla::metrics::AuthenticationMetricRecord> m_vecRecords;
 };

@@ -370,6 +370,184 @@ std::uint64_t CommunicationCostMetricSummary::u64TotalBytes() const noexcept
 
 const CommunicationCostDetails& CommunicationCostMetricSummary::varDetails() const noexcept { return m_varDetails; }
 
+AuthenticationRoundArchiveConfiguration::
+AuthenticationRoundArchiveConfiguration(
+    AuthenticationMetricMode modeAuthentication,
+    std::string strCryptoAlgorithm,
+    std::string strPayloadHash,
+    std::uint32_t u32PacketCount,
+    std::uint32_t u32PacketsPerInterval,
+    std::uint32_t u32IntervalMilliseconds,
+    std::uint32_t u32DisclosureDelay,
+    std::uint32_t u32GroupSize,
+    std::uint32_t u32DetectionThreshold
+)
+    : m_modeAuthentication(modeAuthentication),
+      m_strCryptoAlgorithm(std::move(strCryptoAlgorithm)),
+      m_strPayloadHash(std::move(strPayloadHash)),
+      m_u32PacketCount(u32PacketCount),
+      m_u32PacketsPerInterval(u32PacketsPerInterval),
+      m_u32IntervalMilliseconds(u32IntervalMilliseconds),
+      m_u32DisclosureDelay(u32DisclosureDelay),
+      m_u32GroupSize(u32GroupSize),
+      m_u32DetectionThreshold(u32DetectionThreshold)
+{
+    if (m_strCryptoAlgorithm.empty()
+        || m_u32PacketCount == 0
+        || m_u32PacketsPerInterval == 0
+        || m_u32IntervalMilliseconds == 0
+        || m_u32DisclosureDelay == 0
+        || (m_modeAuthentication == AuthenticationMetricMode::Native
+            && (m_u32GroupSize != 0 || m_u32DetectionThreshold != 0))
+        || (m_modeAuthentication == AuthenticationMetricMode::Improved
+            && (m_u32GroupSize == 0 || m_u32DetectionThreshold == 0)))
+    {
+        throw std::invalid_argument("Round archive configuration is invalid");
+    }
+}
+
+AuthenticationMetricMode AuthenticationRoundArchiveConfiguration::
+modeAuthentication() const noexcept { return m_modeAuthentication; }
+const std::string& AuthenticationRoundArchiveConfiguration::
+strCryptoAlgorithm() const noexcept { return m_strCryptoAlgorithm; }
+const std::string& AuthenticationRoundArchiveConfiguration::
+strPayloadHash() const noexcept { return m_strPayloadHash; }
+std::uint32_t AuthenticationRoundArchiveConfiguration::
+u32PacketCount() const noexcept { return m_u32PacketCount; }
+std::uint32_t AuthenticationRoundArchiveConfiguration::
+u32PacketsPerInterval() const noexcept { return m_u32PacketsPerInterval; }
+std::uint32_t AuthenticationRoundArchiveConfiguration::
+u32IntervalMilliseconds() const noexcept { return m_u32IntervalMilliseconds; }
+std::uint32_t AuthenticationRoundArchiveConfiguration::
+u32DisclosureDelay() const noexcept { return m_u32DisclosureDelay; }
+std::uint32_t AuthenticationRoundArchiveConfiguration::
+u32GroupSize() const noexcept { return m_u32GroupSize; }
+std::uint32_t AuthenticationRoundArchiveConfiguration::
+u32DetectionThreshold() const noexcept { return m_u32DetectionThreshold; }
+
+SenderRoundArchiveDetails::SenderRoundArchiveDetails(
+    std::uint32_t u32SentPacketCount,
+    std::string strConfiguredFault,
+    std::string strConfiguredFaultValue,
+    std::uint64_t u64RandomSeed,
+    std::uint64_t u64FileSize
+)
+    : m_u32SentPacketCount(u32SentPacketCount),
+      m_strConfiguredFault(std::move(strConfiguredFault)),
+      m_strConfiguredFaultValue(std::move(strConfiguredFaultValue)),
+      m_u64RandomSeed(u64RandomSeed),
+      m_u64FileSize(u64FileSize)
+{
+    if (m_strConfiguredFault.empty())
+    {
+        throw std::invalid_argument("Sender round archive fault type is empty");
+    }
+}
+
+std::uint32_t SenderRoundArchiveDetails::u32SentPacketCount() const noexcept { return m_u32SentPacketCount; }
+const std::string& SenderRoundArchiveDetails::strConfiguredFault() const noexcept { return m_strConfiguredFault; }
+const std::string& SenderRoundArchiveDetails::strConfiguredFaultValue() const noexcept { return m_strConfiguredFaultValue; }
+std::uint64_t SenderRoundArchiveDetails::u64RandomSeed() const noexcept { return m_u64RandomSeed; }
+std::uint64_t SenderRoundArchiveDetails::u64FileSize() const noexcept { return m_u64FileSize; }
+
+ReceiverRoundArchiveDetails::ReceiverRoundArchiveDetails(
+    std::uint32_t u32ReceivedPacketCount,
+    std::uint32_t u32AuthenticatedPacketCount,
+    std::uint32_t u32FailedPacketCount,
+    std::uint32_t u32MissingPacketCount,
+    std::uint32_t u32FallbackGroupCount,
+    std::uint64_t u64VerifyTimeNanoseconds,
+    std::uint64_t u64ReceivedAuthBytes,
+    double dEstimatedEnergyMicroJoule,
+    std::uint64_t u64FileSize,
+    std::uint64_t u64RecoveredFileSize,
+    std::string strRecoveredFileHash
+)
+    : m_u32ReceivedPacketCount(u32ReceivedPacketCount),
+      m_u32AuthenticatedPacketCount(u32AuthenticatedPacketCount),
+      m_u32FailedPacketCount(u32FailedPacketCount),
+      m_u32MissingPacketCount(u32MissingPacketCount),
+      m_u32FallbackGroupCount(u32FallbackGroupCount),
+      m_u64VerifyTimeNanoseconds(u64VerifyTimeNanoseconds),
+      m_u64ReceivedAuthBytes(u64ReceivedAuthBytes),
+      m_dEstimatedEnergyMicroJoule(dEstimatedEnergyMicroJoule),
+      m_u64FileSize(u64FileSize),
+      m_u64RecoveredFileSize(u64RecoveredFileSize),
+      m_strRecoveredFileHash(std::move(strRecoveredFileHash))
+{
+    if (m_dEstimatedEnergyMicroJoule < 0.0
+        || m_u64RecoveredFileSize > m_u64FileSize)
+    {
+        throw std::invalid_argument("Receiver round archive details are invalid");
+    }
+}
+
+std::uint32_t ReceiverRoundArchiveDetails::u32ReceivedPacketCount() const noexcept { return m_u32ReceivedPacketCount; }
+std::uint32_t ReceiverRoundArchiveDetails::u32AuthenticatedPacketCount() const noexcept { return m_u32AuthenticatedPacketCount; }
+std::uint32_t ReceiverRoundArchiveDetails::u32FailedPacketCount() const noexcept { return m_u32FailedPacketCount; }
+std::uint32_t ReceiverRoundArchiveDetails::u32MissingPacketCount() const noexcept { return m_u32MissingPacketCount; }
+std::uint32_t ReceiverRoundArchiveDetails::u32FallbackGroupCount() const noexcept { return m_u32FallbackGroupCount; }
+std::uint64_t ReceiverRoundArchiveDetails::u64VerifyTimeNanoseconds() const noexcept { return m_u64VerifyTimeNanoseconds; }
+std::uint64_t ReceiverRoundArchiveDetails::u64ReceivedAuthBytes() const noexcept { return m_u64ReceivedAuthBytes; }
+double ReceiverRoundArchiveDetails::dEstimatedEnergyMicroJoule() const noexcept { return m_dEstimatedEnergyMicroJoule; }
+std::uint64_t ReceiverRoundArchiveDetails::u64FileSize() const noexcept { return m_u64FileSize; }
+std::uint64_t ReceiverRoundArchiveDetails::u64RecoveredFileSize() const noexcept { return m_u64RecoveredFileSize; }
+const std::string& ReceiverRoundArchiveDetails::strRecoveredFileHash() const noexcept { return m_strRecoveredFileHash; }
+
+AuthenticationRoundArchiveSummary::AuthenticationRoundArchiveSummary(
+    std::uint64_t u64TimestampMilliseconds,
+    std::string strExperimentId,
+    std::string strRunId,
+    std::string strGitCommit,
+    std::string strNodeId,
+    std::string strSenderId,
+    std::uint64_t u64ChainId,
+    AuthenticationRoundArchiveConfiguration cfgConfiguration,
+    std::string strRoundStatus,
+    bool bValidSample,
+    std::string strInvalidReason,
+    AuthenticationRoundArchiveDetails varDetails
+)
+    : m_u64TimestampMilliseconds(u64TimestampMilliseconds),
+      m_strExperimentId(std::move(strExperimentId)),
+      m_strRunId(std::move(strRunId)),
+      m_strGitCommit(std::move(strGitCommit)),
+      m_strNodeId(std::move(strNodeId)),
+      m_strSenderId(std::move(strSenderId)),
+      m_u64ChainId(u64ChainId),
+      m_cfgConfiguration(std::move(cfgConfiguration)),
+      m_strRoundStatus(std::move(strRoundStatus)),
+      m_bValidSample(bValidSample),
+      m_strInvalidReason(std::move(strInvalidReason)),
+      m_varDetails(std::move(varDetails))
+{
+    if (m_u64TimestampMilliseconds == 0
+        || m_strExperimentId.empty()
+        || m_strRunId.empty()
+        || m_strGitCommit.empty()
+        || m_strNodeId.empty()
+        || m_strSenderId.empty()
+        || m_strRoundStatus.empty()
+        || (m_bValidSample && !m_strInvalidReason.empty())
+        || (!m_bValidSample && m_strInvalidReason.empty()))
+    {
+        throw std::invalid_argument("Authentication round archive identity is invalid");
+    }
+}
+
+std::uint64_t AuthenticationRoundArchiveSummary::u64TimestampMilliseconds() const noexcept { return m_u64TimestampMilliseconds; }
+const std::string& AuthenticationRoundArchiveSummary::strExperimentId() const noexcept { return m_strExperimentId; }
+const std::string& AuthenticationRoundArchiveSummary::strRunId() const noexcept { return m_strRunId; }
+const std::string& AuthenticationRoundArchiveSummary::strGitCommit() const noexcept { return m_strGitCommit; }
+const std::string& AuthenticationRoundArchiveSummary::strNodeId() const noexcept { return m_strNodeId; }
+const std::string& AuthenticationRoundArchiveSummary::strSenderId() const noexcept { return m_strSenderId; }
+std::uint64_t AuthenticationRoundArchiveSummary::u64ChainId() const noexcept { return m_u64ChainId; }
+const AuthenticationRoundArchiveConfiguration& AuthenticationRoundArchiveSummary::cfgConfiguration() const noexcept { return m_cfgConfiguration; }
+const std::string& AuthenticationRoundArchiveSummary::strRoundStatus() const noexcept { return m_strRoundStatus; }
+bool AuthenticationRoundArchiveSummary::bValidSample() const noexcept { return m_bValidSample; }
+const std::string& AuthenticationRoundArchiveSummary::strInvalidReason() const noexcept { return m_strInvalidReason; }
+const AuthenticationRoundArchiveDetails& AuthenticationRoundArchiveSummary::varDetails() const noexcept { return m_varDetails; }
+
 double EstimatedEnergyCalculator::dEstimateMicroJoule(
     std::uint64_t u64VerifyTimeNanoseconds,
     std::uint64_t u64ReceivedAuthBytes
@@ -575,11 +753,23 @@ std::string AuthenticationMetricStore::strRecordKey(
             + std::to_string(pEnergy->u64ChainId());
     }
 
-    const auto& sumCommunication = std::get<CommunicationCostMetricSummary>(
+    if (const auto* pCommunication = std::get_if<CommunicationCostMetricSummary>(
+            &varRecord
+        ))
+    {
+        return "C:" + pCommunication->strRoundId() + ":"
+            + pCommunication->strSenderId() + ":"
+            + std::to_string(pCommunication->u64ChainId());
+    }
+
+    const auto& sumArchive = std::get<AuthenticationRoundArchiveSummary>(
         varRecord
     );
-    return "C:" + sumCommunication.strRoundId() + ":"
-        + sumCommunication.strSenderId() + ":"
-        + std::to_string(sumCommunication.u64ChainId());
+    const char chRole = std::holds_alternative<SenderRoundArchiveDetails>(
+        sumArchive.varDetails()
+    ) ? 'S' : 'R';
+    return std::string("A:") + chRole + ":" + sumArchive.strRunId() + ":"
+        + sumArchive.strNodeId() + ":" + sumArchive.strSenderId() + ":"
+        + std::to_string(sumArchive.u64ChainId());
 }
 }

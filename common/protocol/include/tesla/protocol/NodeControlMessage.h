@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tesla/protocol/AuthenticationControl.h"
+#include "tesla/protocol/ExperimentControl.h"
 #include "tesla/protocol/MetricControl.h"
 #include "tesla/protocol/MonitorControl.h"
 
@@ -29,6 +30,9 @@ enum class NodeControlMessageType
     FileUploadBegin,
     FileUploadEnd,
     AuthenticationConfigAcknowledgement,
+    FaultInjectionConfig,
+    AttackSourceMapping,
+    ExperimentControlAcknowledgement,
     RoundStart,
     RoundPause,
     RoundResume,
@@ -129,6 +133,9 @@ using NodeControlMessageDetails = std::variant<
     FileUploadBeginControlDetails,
     FileUploadEndControlDetails,
     AuthenticationConfigAcknowledgementControlDetails,
+    FaultInjectionControlDetails,
+    AttackSourceMappingControlDetails,
+    ExperimentControlAcknowledgementDetails,
     AuthenticationRoundCommandControlDetails,
     AuthenticationRoundAcknowledgementControlDetails,
     AuthenticationRoundResultControlDetails,

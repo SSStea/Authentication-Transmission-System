@@ -1,11 +1,13 @@
 #pragma once
 
+#include "tesla/protocol/AttackControl.h"
 #include "tesla/protocol/NodeControlMessage.h"
 #include "tesla/protocol/NodeDiscoveryMessage.h"
 
 #include <QHash>
 #include <QByteArray>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QVector>
 
@@ -92,6 +94,8 @@ public:
 
     void start();
     void stop() noexcept;
+    /** @brief 增加一个扫描目标端口，用于同机隔离测试或受限网络中的兼容发现。 */
+    void addDiscoveryScanPort(std::uint16_t u16DiscoveryPort);
     void scanNodes();
     void connectAll();
     void disconnectAll();
@@ -99,6 +103,10 @@ public:
     bool bSendNodeControl(
         const QString& strEndpointKey,
         const tesla::protocol::NodeControlMessage& msgMessage
+    );
+    bool bSendAttackControl(
+        const QString& strEndpointKey,
+        const tesla::protocol::AttackControlMessage& msgMessage
     );
     /** @brief 在现有MANAGER连接上按64KiB分块并受背压约束地上传完整文件。 */
     bool bQueueFileUpload(
@@ -113,6 +121,10 @@ public:
 signals:
     void nodesChanged();
     void nodeControlJsonReceived(
+        const QString& strEndpointKey,
+        const QString& strJson
+    );
+    void attackControlJsonReceived(
         const QString& strEndpointKey,
         const QString& strJson
     );
@@ -146,10 +158,11 @@ private:
         std::uint16_t u16ManagementPort
     ) const;
 
-    std::uint16_t m_u16DiscoveryPort;
+    std::uint16_t             m_u16DiscoveryPort;
+    QSet<std::uint16_t>       m_setDiscoveryScanPorts;
     std::chrono::milliseconds m_durOfflineTimeout;
-    QUdpSocket* m_pScanSocket;
-    QUdpSocket* m_pHeartbeatSocket;
-    QTimer*     m_pOfflineTimer;
+    QUdpSocket*                m_pScanSocket;
+    QUdpSocket*                m_pHeartbeatSocket;
+    QTimer*                    m_pOfflineTimer;
     QHash<QString, std::shared_ptr<EndpointState>> m_mapEndpoints;
 };

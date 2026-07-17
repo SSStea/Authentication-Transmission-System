@@ -58,6 +58,8 @@ public:
         vecGroupObservationSnapshot() const;
     std::vector<tesla::protocol::DosSummaryControlDetails>
         vecDosSummarySnapshot() const;
+    std::vector<tesla::metrics::AuthenticationMetricRecord>
+        vecMetricSnapshot() const;
     std::optional<tesla::core::LocalSenderKeyChainSnapshot>
         optLocalKeyChainSnapshot() const;
     std::optional<tesla::core::LocalSenderKeyChainProgress>

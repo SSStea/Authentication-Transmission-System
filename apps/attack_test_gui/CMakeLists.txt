@@ -1,4 +1,6 @@
 qt_add_executable(tesla_attack_test_gui
+    AttackExecutionController.cpp
+    AttackExecutionController.h
     AttackTestMainWindow.cpp
     AttackTestMainWindow.h
     AttackTestNetworkController.cpp
@@ -8,11 +10,13 @@ qt_add_executable(tesla_attack_test_gui
 )
 
 source_group("Header Files" FILES
+    AttackExecutionController.h
     AttackTestMainWindow.h
     AttackTestNetworkController.h
 )
 source_group("Source Files" FILES
     AttackTestMainWindow.cpp
+    AttackExecutionController.cpp
     AttackTestNetworkController.cpp
     main.cpp
 )

@@ -132,6 +132,7 @@ int main(int nArgc, char* arrArgv[])
     const QString strPcPort = QString::number(nPortBase + 1);
     const QString strAttackPort = QString::number(nPortBase + 2);
     const QString strMulticastPort = QString::number(nPortBase + 3);
+    const QString strTestEndpointDiscoveryPort = QString::number(nPortBase + 4);
     QString strFailure;
 
     // 先验证四套主窗口都能在无显示器环境中完成构造和安全退出。
@@ -206,7 +207,7 @@ int main(int nArgc, char* arrArgv[])
         {
             QStringLiteral("--stage5-service-test"),
             QStringLiteral("--discovery-port"),
-            strDiscoveryPort,
+            strTestEndpointDiscoveryPort,
             QStringLiteral("--control-port"),
             strAttackPort,
             QStringLiteral("--multicast-port"),
@@ -223,12 +224,30 @@ int main(int nArgc, char* arrArgv[])
     }
 
     QThread::msleep(800);
+    if (prcPcNode.state() == QProcess::NotRunning
+        || prcAttackTest.state() == QProcess::NotRunning)
+    {
+        strFailure = QStringLiteral(
+            "A stage5 service exited during startup.\nPC node: %1\nTest endpoint: %2"
+        )
+            .arg(
+                QString::fromLocal8Bit(prcPcNode.readAllStandardError()),
+                QString::fromLocal8Bit(prcAttackTest.readAllStandardError())
+            );
+        stopService(prcPcNode);
+        stopService(prcAttackTest);
+        std::cerr << strFailure.toStdString() << std::endl;
+        return 1;
+    }
+
     const bool bManagerConnected = bRunProcess(
         strManager,
         {
             QStringLiteral("--stage5-connection-test"),
             QStringLiteral("--discovery-port"),
-            strDiscoveryPort
+            strDiscoveryPort,
+            QStringLiteral("--additional-discovery-port"),
+            strTestEndpointDiscoveryPort
         },
         10000,
         strFailure
@@ -250,6 +269,11 @@ int main(int nArgc, char* arrArgv[])
     stopService(prcAttackTest);
     if (!bManagerConnected || !bMonitorConnected)
     {
+        strFailure += QStringLiteral("\nPC node service: %1\nTest endpoint service: %2")
+            .arg(
+                QString::fromLocal8Bit(prcPcNode.readAllStandardError()),
+                QString::fromLocal8Bit(prcAttackTest.readAllStandardError())
+            );
         std::cerr << strFailure.toStdString() << std::endl;
         return 1;
     }

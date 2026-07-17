@@ -1,5 +1,6 @@
 set(TESLA_CORE_HEADERS
     include/tesla/core/AuthenticationAuthority.h
+    include/tesla/core/AuthenticationFaultInjection.h
     include/tesla/core/AuthenticationInputEncoder.h
     include/tesla/core/AuthenticationNodeRuntime.h
     include/tesla/core/AuthenticationObservationFactory.h
@@ -26,6 +27,7 @@ set(TESLA_CORE_HEADERS
 
 set(TESLA_CORE_SOURCES
     src/AuthenticationAuthority.cpp
+    src/AuthenticationFaultInjection.cpp
     src/AuthenticationInputEncoder.cpp
     src/AuthenticationNodeRuntime.cpp
     src/AuthenticationObservationFactory.cpp

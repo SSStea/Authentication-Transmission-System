@@ -1,6 +1,7 @@
 set(TESLA_PROTOCOL_HEADERS
     include/tesla/protocol/AttackControl.h
     include/tesla/protocol/AuthenticationControl.h
+    include/tesla/protocol/ExperimentControl.h
     include/tesla/protocol/MetricControl.h
     include/tesla/protocol/MonitorControl.h
     include/tesla/protocol/NodeControlJsonCodec.h
@@ -15,6 +16,7 @@ set(TESLA_PROTOCOL_HEADERS
 set(TESLA_PROTOCOL_SOURCES
     src/AttackControl.cpp
     src/AuthenticationControl.cpp
+    src/ExperimentControl.cpp
     src/MetricControl.cpp
     src/MonitorControl.cpp
     src/NodeControlJsonCodec.cpp

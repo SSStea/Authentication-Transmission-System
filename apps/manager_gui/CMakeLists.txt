@@ -1,4 +1,6 @@
 qt_add_executable(tesla_manager_gui
+    ManagerAttackExperimentController.cpp
+    ManagerAttackExperimentController.h
     ManagerAuthenticationController.cpp
     ManagerAuthenticationController.h
     ManagerMainWindow.cpp
@@ -10,11 +12,13 @@ qt_add_executable(tesla_manager_gui
 )
 
 source_group("Header Files" FILES
+    ManagerAttackExperimentController.h
     ManagerAuthenticationController.h
     ManagerMainWindow.h
     ManagerNetworkController.h
 )
 source_group("Source Files" FILES
+    ManagerAttackExperimentController.cpp
     ManagerAuthenticationController.cpp
     ManagerMainWindow.cpp
     ManagerNetworkController.cpp

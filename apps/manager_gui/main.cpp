@@ -28,6 +28,11 @@ int main(int nArgc, char* arrArgv[])
         QStringLiteral("port"),
         QStringLiteral("37020")
     });
+    prsCommandLine.addOption({
+        QStringLiteral("additional-discovery-port"),
+        QStringLiteral("Scan one additional discovery port during an isolated test."),
+        QStringLiteral("port")
+    });
     prsCommandLine.process(appApplication);
 
     bool bPortValid = false;
@@ -44,6 +49,24 @@ int main(int nArgc, char* arrArgv[])
         ManagerNetworkController ctlNetwork(
             static_cast<std::uint16_t>(nDiscoveryPort)
         );
+        if (prsCommandLine.isSet(QStringLiteral("additional-discovery-port")))
+        {
+            bool bAdditionalPortValid = false;
+            const int nAdditionalDiscoveryPort = prsCommandLine.value(
+                QStringLiteral("additional-discovery-port")
+            ).toInt(&bAdditionalPortValid);
+            if (!bAdditionalPortValid
+                || nAdditionalDiscoveryPort <= 0
+                || nAdditionalDiscoveryPort > 65535)
+            {
+                return 2;
+            }
+
+            // Windows同机进程无法可靠共享单播发现报文，隔离测试使用第二扫描端口。
+            ctlNetwork.addDiscoveryScanPort(
+                static_cast<std::uint16_t>(nAdditionalDiscoveryPort)
+            );
+        }
         QObject::connect(
             &ctlNetwork,
             &ManagerNetworkController::logMessage,

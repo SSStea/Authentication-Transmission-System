@@ -3,6 +3,7 @@
 #include "ManagerNetworkController.h"
 #include "tesla/core/AuthenticationAuthority.h"
 #include "tesla/crypto/OpenSslSecureRandomProvider.h"
+#include "tesla/protocol/ExperimentControl.h"
 
 #include <QObject>
 #include <QByteArray>
@@ -127,16 +128,35 @@ public:
         QString& strError
     );
     bool bStartRound(QString& strError);
+    /** @brief 使用编排器提供的唯一时间启动，保证节点与测试端共享同一时间基准。 */
+    bool bStartRoundAt(
+        std::uint64_t u64StartTimestampMilliseconds,
+        QString& strError
+    );
     bool bPauseRound(QString& strError);
     bool bResumeRound(QString& strError);
     bool bStopRound(QString& strError);
+    bool bConfigureFaultPlan(
+        int nSenderContextIndex,
+        tesla::protocol::AuthenticationFaultDetails varFaultDetails,
+        QString& strError
+    );
 
     bool bConfigurationReady() const noexcept;
+    bool bFaultConfigured() const noexcept;
+    bool bFaultPlanPending() const noexcept;
+    bool bFaultPlanReady() const noexcept;
     bool bRoundRunning() const noexcept;
     bool bRoundPaused() const noexcept;
+    QString strRoundId() const noexcept;
+    QVector<tesla::protocol::AttackRoundContextControlDetails>
+        vecAttackRoundContexts() const;
+    QString strSenderEndpointKey(int nSenderContextIndex) const;
+    QVector<QString> vecReceiverEndpointKeys(int nSenderContextIndex) const;
 
 signals:
     void configurationStateChanged(bool bReady, const QString& strMessage);
+    void faultPlanStateChanged(bool bReady, const QString& strMessage);
     void roundStateChanged(bool bRunning, bool bPaused);
     void resultMessage(const QString& strMessage);
     void fileComparisonResult(
@@ -187,9 +207,13 @@ private:
     std::vector<SenderTarget> m_vecSenderTargets;
     QSet<QString> m_setParticipantEndpoints;
     QSet<QString> m_setPendingConfigurationRequests;
+    QSet<QString> m_setPendingFaultRequests;
     QSet<QString> m_setReceivedResultKeys;
     bool m_bConfigurationRejected;
     bool m_bConfigurationReady;
+    bool m_bFaultConfigured;
+    bool m_bFaultRejected;
+    bool m_bFaultReady;
     bool m_bRoundRunning;
     bool m_bRoundPaused;
     bool m_bFileRound;

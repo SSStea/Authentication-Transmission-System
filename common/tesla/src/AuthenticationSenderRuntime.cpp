@@ -1,5 +1,6 @@
 #include "tesla/core/AuthenticationSenderRuntime.h"
 
+#include "tesla/core/AuthenticationFaultInjection.h"
 #include "tesla/core/AuthenticationPacketInput.h"
 #include "tesla/core/AuthenticationObservationFactory.h"
 #include "tesla/core/ImprovedTeslaDetails.h"
@@ -234,11 +235,43 @@ public:
         std::lock_guard<std::mutex> lckState(m_mtxState);
         m_optSenderContext.reset();
         m_optPayloadWorkload.reset();
+        m_optFaultDetails.reset();
+        m_ptrFaultPolicy.reset();
         m_vecIntervals.clear();
         m_strRoundId.clear();
         m_bConfigured = false;
         m_bRunning = false;
         m_bPaused = false;
+    }
+
+    void configureFault(protocol::AuthenticationFaultDetails varFaultDetails)
+    {
+        std::lock_guard<std::mutex> lckState(m_mtxState);
+        if (m_bRunning || !m_optSenderContext.has_value())
+        {
+            throw std::logic_error(
+                "Sender fault configuration requires an idle configured sender"
+            );
+        }
+
+        // 先创建临时策略完成全部参数校验，再替换当前配置。
+        std::unique_ptr<AuthenticationFaultPolicy> ptrPolicy =
+            ptrCreateAuthenticationFaultPolicy(
+                varFaultDetails,
+                m_optSenderContext->matMaterial().prmRoundParameters()
+            );
+        m_optFaultDetails = std::move(varFaultDetails);
+        m_ptrFaultPolicy = std::move(ptrPolicy);
+    }
+
+    void clearFault() noexcept
+    {
+        std::lock_guard<std::mutex> lckState(m_mtxState);
+        if (!m_bRunning)
+        {
+            m_optFaultDetails.reset();
+            m_ptrFaultPolicy.reset();
+        }
     }
 
     void start(
@@ -279,6 +312,14 @@ public:
             m_u32CurrentInterval = 0;
             m_u32SentDataPacketCount = 0;
             m_bCommunicationMetricEmitted = false;
+            if (m_optFaultDetails.has_value())
+            {
+                // 每轮重建有状态策略，确保随机选择和逻辑断链窗口可复现。
+                m_ptrFaultPolicy = ptrCreateAuthenticationFaultPolicy(
+                    m_optFaultDetails.value(),
+                    m_optSenderContext->matMaterial().prmRoundParameters()
+                );
+            }
             if (m_fnMetricHandler)
             {
                 const TeslaAuthenticationMode modeAuthentication =
@@ -854,20 +895,52 @@ private:
                     break;
                 }
 
-                const SteadyClock::time_point tpSendStart = SteadyClock::now();
-                const bool bSent = m_fnDatagramSender(
-                    intDatagrams.vecDatagrams[nDatagramIndex]
+                const protocol::ByteBuffer& vecDatagram =
+                    intDatagrams.vecDatagrams[nDatagramIndex];
+                DatagramFaultDecision decFault(
+                    DatagramFaultDisposition::Send,
+                    0,
+                    "NORMAL_SEND"
                 );
-                if (bSent)
+                if (m_ptrFaultPolicy != nullptr)
                 {
-                    recordSentAuthenticationFields(
-                        intDatagrams.vecDatagrams[nDatagramIndex]
+                    decFault = m_ptrFaultPolicy->decDecide(
+                        vecDatagram,
+                        u64NowMilliseconds()
                     );
                 }
+
+                if (decFault.dspDisposition() == DatagramFaultDisposition::Drop)
+                {
+                    emitPacketObservation(
+                        vecDatagram,
+                        false,
+                        u64NowMilliseconds(),
+                        decFault.strReason()
+                    );
+                    continue;
+                }
+
+                const std::chrono::milliseconds durFaultDelay(
+                    decFault.u32DelayMilliseconds()
+                );
+                if (durFaultDelay.count() > 0
+                    && !bWaitUntil(tpSendTarget + durFaultDelay))
+                {
+                    break;
+                }
+
+                const SteadyClock::time_point tpSendStart = SteadyClock::now();
+                const bool bSent = m_fnDatagramSender(vecDatagram);
+                if (bSent)
+                {
+                    recordSentAuthenticationFields(vecDatagram);
+                }
                 emitPacketObservation(
-                    intDatagrams.vecDatagrams[nDatagramIndex],
+                    vecDatagram,
                     bSent,
-                    u64NowMilliseconds()
+                    u64NowMilliseconds(),
+                    bSent ? decFault.strReason() : "DATAGRAM_SEND_FAILED"
                 );
                 const std::chrono::nanoseconds durSend =
                     std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -878,7 +951,8 @@ private:
                     durSend
                 );
 
-                if (!bSent || SteadyClock::now() >= tpIntervalEnd)
+                if (!bSent
+                    || SteadyClock::now() >= tpIntervalEnd + durFaultDelay)
                 {
                     bOverrun = true;
                     break;
@@ -986,7 +1060,8 @@ private:
     void emitPacketObservation(
         const protocol::ByteBuffer& vecDatagram,
         bool bSent,
-        std::uint64_t u64TimestampMilliseconds
+        std::uint64_t u64TimestampMilliseconds,
+        const std::string& strReason
     ) noexcept
     {
         if (!m_fnObservationHandler || !m_optSenderContext.has_value())
@@ -1062,7 +1137,7 @@ private:
                         vecDatagram
                     ),
                     1,
-                    bSent ? "Datagram sent" : "Datagram send failed",
+                    strReason,
                     AuthenticationObservationFactory::varPayloadDetails(
                         udpPacket
                     ),
@@ -1359,6 +1434,8 @@ private:
     std::thread                     m_thrWorker;
     std::optional<SenderAuthenticationContext> m_optSenderContext;
     std::optional<SenderPayloadWorkload>        m_optPayloadWorkload;
+    std::optional<protocol::AuthenticationFaultDetails> m_optFaultDetails;
+    std::unique_ptr<AuthenticationFaultPolicy>  m_ptrFaultPolicy;
     std::optional<metrics::CommunicationCostAccumulator>
         m_optCommunicationAccumulator;
     std::vector<IntervalDatagrams>  m_vecIntervals;
@@ -1412,6 +1489,18 @@ void AuthenticationSenderRuntime::configure(
 void AuthenticationSenderRuntime::resetConfiguration() noexcept
 {
     m_ptrImpl->resetConfiguration();
+}
+
+void AuthenticationSenderRuntime::configureFault(
+    protocol::AuthenticationFaultDetails varFaultDetails
+)
+{
+    m_ptrImpl->configureFault(std::move(varFaultDetails));
+}
+
+void AuthenticationSenderRuntime::clearFault() noexcept
+{
+    m_ptrImpl->clearFault();
 }
 
 void AuthenticationSenderRuntime::start(

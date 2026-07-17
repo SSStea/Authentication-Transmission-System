@@ -188,7 +188,7 @@ bool bTestAttackControlJsonMessages()
         "attack-status-1",
         "ATTACKER-200",
         true,
-        false,
+        AttackExecutionState::Idle,
         1'700'000'000'000ULL
     ));
     const AttackControlDecodeResult resStatus = AttackControlJsonCodec::resDecode(

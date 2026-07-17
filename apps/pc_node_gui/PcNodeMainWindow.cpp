@@ -195,6 +195,9 @@ void PcNodeMainWindow::refreshAuthenticationViews()
         m_ctlNetwork.vecFailureObservationSnapshot(),
         m_ctlNetwork.vecDosSummarySnapshot()
     );
+    m_pAuthenticationMonitor->setMetricSnapshots(
+        m_ctlNetwork.vecMetricSnapshot()
+    );
     m_pKeyChainWidget->setKeyChain(
         m_ctlNetwork.optLocalKeyChainSnapshot(),
         m_ctlNetwork.optLocalKeyChainProgress()

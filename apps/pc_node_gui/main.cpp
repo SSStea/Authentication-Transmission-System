@@ -5,6 +5,8 @@
 #include "PcNodeMainWindow.h"
 #include "PcNodeNetworkController.h"
 
+#include <iostream>
+
 int main(int nArgc, char* arrArgv[])
 {
     QApplication appApplication(nArgc, arrArgv);
@@ -54,6 +56,14 @@ int main(int nArgc, char* arrArgv[])
         PcNodeNetworkController ctlNetwork(
             static_cast<std::uint16_t>(nDiscoveryPort),
             static_cast<std::uint16_t>(nManagementPort)
+        );
+        QObject::connect(
+            &ctlNetwork,
+            &PcNodeNetworkController::logMessage,
+            [](const QString& strMessage)
+            {
+                std::cerr << strMessage.toStdString() << std::endl;
+            }
         );
         if (!ctlNetwork.bStart())
         {

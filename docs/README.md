@@ -7,3 +7,4 @@
 - [阶段5四套GUI框架与连接](stage5-gui-framework-and-connections.md)
 - [阶段8报文、异常与本地可视化](stage8-observation-and-visualization.md)
 - [阶段9通信、计算与估算能耗指标](stage9-metrics-and-estimated-energy.md)
+- [阶段10A认证鲁棒性测试与异常流量模拟](stage10-attack-experiment.md)

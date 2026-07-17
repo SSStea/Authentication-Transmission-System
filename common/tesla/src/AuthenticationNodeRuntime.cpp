@@ -9,9 +9,12 @@
 #include "tesla/workload/TextWorkload.h"
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
+#include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -21,6 +24,154 @@ namespace tesla::core
 {
 namespace
 {
+#ifndef TESLA_GIT_COMMIT
+#define TESLA_GIT_COMMIT "unknown"
+#endif
+
+using ArchiveContextKey = std::pair<std::string, std::uint64_t>;
+
+struct ArchiveContext final
+{
+    metrics::AuthenticationRoundArchiveConfiguration cfgConfiguration;
+    std::string                                       strConfiguredFault;
+    std::string                                       strConfiguredFaultValue;
+    std::uint64_t                                     u64RandomSeed;
+};
+
+std::uint64_t u64NowMilliseconds() noexcept
+{
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<
+        std::chrono::milliseconds
+    >(std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
+std::string strCryptoAlgorithm(crypto::CryptoAlgorithm algCrypto)
+{
+    switch (algCrypto)
+    {
+    case crypto::CryptoAlgorithm::Sha256:
+        return "SHA-256";
+    case crypto::CryptoAlgorithm::Sm3:
+        return "SM3";
+    case crypto::CryptoAlgorithm::Sha3_256:
+        return "SHA3-256";
+    }
+
+    throw std::invalid_argument("Unknown archive crypto algorithm");
+}
+
+metrics::AuthenticationRoundArchiveConfiguration cfgArchive(
+    const AuthenticationRoundParameters& prmRound
+)
+{
+    const std::optional<ImprovedTeslaParameters>& optImproved =
+        prmRound.optImprovedParameters();
+    return metrics::AuthenticationRoundArchiveConfiguration(
+        prmRound.modeAuthentication() == TeslaAuthenticationMode::Native
+            ? metrics::AuthenticationMetricMode::Native
+            : metrics::AuthenticationMetricMode::Improved,
+        strCryptoAlgorithm(prmRound.algCryptoAlgorithm()),
+        "",
+        prmRound.u32TotalPacketCount(),
+        prmRound.u32PacketsPerInterval(),
+        prmRound.u32IntervalMilliseconds(),
+        prmRound.u32DisclosureDelay(),
+        optImproved.has_value() ? optImproved->u32GroupSize() : 0,
+        optImproved.has_value() ? optImproved->u32DetectionThreshold() : 0
+    );
+}
+
+metrics::AuthenticationRoundArchiveConfiguration cfgWithPayloadHash(
+    const metrics::AuthenticationRoundArchiveConfiguration& cfgConfiguration,
+    std::string strPayloadHash
+)
+{
+    return metrics::AuthenticationRoundArchiveConfiguration(
+        cfgConfiguration.modeAuthentication(),
+        cfgConfiguration.strCryptoAlgorithm(),
+        std::move(strPayloadHash),
+        cfgConfiguration.u32PacketCount(),
+        cfgConfiguration.u32PacketsPerInterval(),
+        cfgConfiguration.u32IntervalMilliseconds(),
+        cfgConfiguration.u32DisclosureDelay(),
+        cfgConfiguration.u32GroupSize(),
+        cfgConfiguration.u32DetectionThreshold()
+    );
+}
+
+/** @brief 第29.5节payloadHash固定使用SHA-256，与本轮认证密码套件独立。 */
+std::string strPayloadSha256(const crypto::ByteBuffer& vecPayload)
+{
+    const crypto::OpenSslCryptoProvider crpSha256(
+        crypto::CryptoAlgorithm::Sha256
+    );
+    const crypto::Digest digPayload = crpSha256.digHash(vecPayload);
+    static constexpr char HEX_DIGITS[] = "0123456789abcdef";
+
+    std::string strResult;
+    strResult.reserve(digPayload.size() * 2U);
+    for (const std::uint8_t u8Byte : digPayload)
+    {
+        strResult.push_back(HEX_DIGITS[(u8Byte >> 4U) & 0x0FU]);
+        strResult.push_back(HEX_DIGITS[u8Byte & 0x0FU]);
+    }
+    return strResult;
+}
+
+std::string strPayloadSha256(const std::string& strPayload)
+{
+    return strPayloadSha256(crypto::ByteBuffer(
+        strPayload.begin(),
+        strPayload.end()
+    ));
+}
+
+std::string strArchiveStatus(AuthenticationRuntimeResultStatus statusResult)
+{
+    switch (statusResult)
+    {
+    case AuthenticationRuntimeResultStatus::Completed:
+        return "COMPLETED";
+    case AuthenticationRuntimeResultStatus::AuthenticationFailed:
+        return "AUTHENTICATION_FAILED";
+    case AuthenticationRuntimeResultStatus::VerificationTimeout:
+        return "VERIFICATION_TIMEOUT";
+    case AuthenticationRuntimeResultStatus::InvalidSchedulingOverrun:
+        return "INVALID_SCHEDULING_OVERRUN";
+    case AuthenticationRuntimeResultStatus::Stopped:
+        return "STOPPED";
+    case AuthenticationRuntimeResultStatus::ProtocolIncomplete:
+        return "PROTOCOL_INCOMPLETE";
+    case AuthenticationRuntimeResultStatus::TimeUnsynchronized:
+        return "TIME_UNSYNCHRONIZED";
+    }
+
+    throw std::invalid_argument("Unknown archive round status");
+}
+
+bool bValidArchiveSample(AuthenticationRuntimeResultStatus statusResult) noexcept
+{
+    return statusResult == AuthenticationRuntimeResultStatus::Completed
+        || statusResult == AuthenticationRuntimeResultStatus::AuthenticationFailed;
+}
+
+std::string strExperimentId(
+    const metrics::AuthenticationRoundArchiveConfiguration& cfgConfiguration
+)
+{
+    return std::string("tesla-")
+        + (cfgConfiguration.modeAuthentication()
+                == metrics::AuthenticationMetricMode::Native
+            ? "native" : "improved")
+        + "-" + cfgConfiguration.strCryptoAlgorithm()
+        + "-p" + std::to_string(cfgConfiguration.u32PacketCount())
+        + "-ppi" + std::to_string(cfgConfiguration.u32PacketsPerInterval())
+        + "-i" + std::to_string(cfgConfiguration.u32IntervalMilliseconds())
+        + "-d" + std::to_string(cfgConfiguration.u32DisclosureDelay())
+        + "-g" + std::to_string(cfgConfiguration.u32GroupSize())
+        + "-t" + std::to_string(cfgConfiguration.u32DetectionThreshold());
+}
+
 crypto::CryptoAlgorithm algMap(
     protocol::AuthenticationCryptoAlgorithm algControl
 )
@@ -350,6 +501,14 @@ public:
             return msgApplyTextPayload(std::get<
                 protocol::TextPayloadControlDetails
             >(msgMessage.varDetails()));
+        case protocol::NodeControlMessageType::FaultInjectionConfig:
+            return msgApplyFault(std::get<
+                protocol::FaultInjectionControlDetails
+            >(msgMessage.varDetails()));
+        case protocol::NodeControlMessageType::AttackSourceMapping:
+            return msgApplyAttackSourceMapping(std::get<
+                protocol::AttackSourceMappingControlDetails
+            >(msgMessage.varDetails()));
         case protocol::NodeControlMessageType::RoundStart:
         case protocol::NodeControlMessageType::RoundPause:
         case protocol::NodeControlMessageType::RoundResume:
@@ -415,10 +574,25 @@ public:
                 );
             }
 
+            const std::string strPayloadHash = strPayloadSha256(
+                wrkFile.vecFileBytes()
+            );
             m_runSender.configure(
                 m_optSenderContext.value(),
                 SenderPayloadWorkload(std::move(wrkFile))
             );
+            const ArchiveContextKey keyArchive(
+                matMaterial.strSenderId(),
+                matMaterial.u64ChainId()
+            );
+            auto itrArchive = m_mapArchiveContexts.find(keyArchive);
+            if (itrArchive != m_mapArchiveContexts.end())
+            {
+                itrArchive->second.cfgConfiguration = cfgWithPayloadHash(
+                    itrArchive->second.cfgConfiguration,
+                    strPayloadHash
+                );
+            }
             return msgConfigAcknowledgement(
                 strRequestId,
                 protocol::AuthenticationConfigTarget::FilePayload,
@@ -519,6 +693,10 @@ private:
                 == protocol::NodeControlMessageType::ReceiverAuthenticationContexts
             || typeMessage
                 == protocol::NodeControlMessageType::TextPayloadConfig
+            || typeMessage
+                == protocol::NodeControlMessageType::FaultInjectionConfig
+            || typeMessage
+                == protocol::NodeControlMessageType::AttackSourceMapping
             || typeMessage == protocol::NodeControlMessageType::RoundStart
             || typeMessage == protocol::NodeControlMessageType::RoundPause
             || typeMessage == protocol::NodeControlMessageType::RoundResume
@@ -563,10 +741,35 @@ private:
                     crpProvider
                 );
 
+            ArchiveContext ctxArchive{
+                cfgArchive(ctxCandidate.matMaterial().prmRoundParameters()),
+                "NONE",
+                "",
+                0
+            };
+
             std::lock_guard<std::mutex> lckConfig(m_mtxConfig);
             // 新链配置先使旧载荷失效，必须收到同一chainId的新载荷后才能启动。
             m_runSender.resetConfiguration();
             m_optSenderContext = std::move(ctxCandidate);
+            for (auto itrArchive = m_mapArchiveContexts.begin();
+                itrArchive != m_mapArchiveContexts.end();)
+            {
+                // 本节点同一时刻只保留一条Sender链，防止长期运行累积过期归档上下文。
+                if (itrArchive->first.first == detConfig.strSenderId()
+                    && itrArchive->first.second != detConfig.u64ChainId())
+                {
+                    itrArchive = m_mapArchiveContexts.erase(itrArchive);
+                }
+                else
+                {
+                    ++itrArchive;
+                }
+            }
+            m_mapArchiveContexts.insert_or_assign(
+                ArchiveContextKey(detConfig.strSenderId(), detConfig.u64ChainId()),
+                std::move(ctxArchive)
+            );
             return msgConfigAcknowledgement(
                 detConfig.strRequestId(),
                 protocol::AuthenticationConfigTarget::Sender,
@@ -601,11 +804,14 @@ private:
             }
 
             std::vector<ReceiverAuthenticationContext> vecContexts;
+            std::vector<std::pair<ArchiveContextKey, ArchiveContext>>
+                vecArchiveContexts;
             vecContexts.reserve(detConfig.vecContexts().size());
+            vecArchiveContexts.reserve(detConfig.vecContexts().size());
             for (const protocol::ReceiverAuthenticationContextControlDetails&
                 detContext : detConfig.vecContexts())
             {
-                vecContexts.emplace_back(
+                ReceiverAuthenticationContext ctxReceiver(
                     detContext.strSenderId(),
                     detContext.strSenderIpAddress(),
                     detContext.u64ChainId(),
@@ -613,9 +819,61 @@ private:
                     prmMap(detContext.prmRoundParameters()),
                     varMapReceiverPayload(detContext.varPayloadDetails())
                 );
+                vecArchiveContexts.emplace_back(
+                    ArchiveContextKey(
+                        detContext.strSenderId(),
+                        detContext.u64ChainId()
+                    ),
+                    ArchiveContext{
+                        cfgArchive(ctxReceiver.prmRoundParameters()),
+                        "NOT_DISTRIBUTED",
+                        "",
+                        0
+                    }
+                );
+                vecContexts.push_back(std::move(ctxReceiver));
             }
 
             m_runReceiver.configure(std::move(vecContexts));
+            {
+                std::lock_guard<std::mutex> lckConfig(m_mtxConfig);
+                std::set<ArchiveContextKey> setActiveArchiveKeys;
+                for (const auto& parArchive : vecArchiveContexts)
+                {
+                    setActiveArchiveKeys.insert(parArchive.first);
+                }
+                if (m_optSenderContext.has_value())
+                {
+                    const SenderAuthenticationMaterial& matLocal =
+                        m_optSenderContext->matMaterial();
+                    setActiveArchiveKeys.emplace(
+                        matLocal.strSenderId(),
+                        matLocal.u64ChainId()
+                    );
+                }
+
+                // Receiver配置是完整快照；淘汰旧链可同时限制内存并避免轮次ID误关联。
+                for (auto itrArchive = m_mapArchiveContexts.begin();
+                    itrArchive != m_mapArchiveContexts.end();)
+                {
+                    if (setActiveArchiveKeys.find(itrArchive->first)
+                        == setActiveArchiveKeys.end())
+                    {
+                        itrArchive = m_mapArchiveContexts.erase(itrArchive);
+                    }
+                    else
+                    {
+                        ++itrArchive;
+                    }
+                }
+                for (auto& parArchive : vecArchiveContexts)
+                {
+                    m_mapArchiveContexts.insert_or_assign(
+                        std::move(parArchive.first),
+                        std::move(parArchive.second)
+                    );
+                }
+            }
             return msgConfigAcknowledgement(
                 detConfig.strRequestId(),
                 protocol::AuthenticationConfigTarget::Receiver,
@@ -667,6 +925,19 @@ private:
                 m_optSenderContext.value(),
                 SenderPayloadWorkload(std::move(wrkCandidate))
             );
+            const SenderAuthenticationMaterial& matMaterial =
+                m_optSenderContext->matMaterial();
+            auto itrArchive = m_mapArchiveContexts.find(ArchiveContextKey(
+                matMaterial.strSenderId(),
+                matMaterial.u64ChainId()
+            ));
+            if (itrArchive != m_mapArchiveContexts.end())
+            {
+                itrArchive->second.cfgConfiguration = cfgWithPayloadHash(
+                    itrArchive->second.cfgConfiguration,
+                    strPayloadSha256(detPayload.strUtf8Text())
+                );
+            }
 
             return msgConfigAcknowledgement(
                 detPayload.strRequestId(),
@@ -684,6 +955,134 @@ private:
                 false,
                 "INVALID_TEXT_PAYLOAD",
                 exError.what()
+            );
+        }
+    }
+
+    protocol::NodeControlMessage msgApplyFault(
+        const protocol::FaultInjectionControlDetails& detFault
+    )
+    {
+        try
+        {
+            std::lock_guard<std::mutex> lckConfig(m_mtxConfig);
+            if (!m_optSenderContext.has_value()
+                || !m_runSender.bIsConfigured())
+            {
+                throw std::logic_error(
+                    "Fault plan requires a prepared sender payload"
+                );
+            }
+
+            const SenderAuthenticationMaterial& matMaterial =
+                m_optSenderContext->matMaterial();
+            if (detFault.strTargetSenderId() != matMaterial.strSenderId()
+                || detFault.u64ChainId() != matMaterial.u64ChainId())
+            {
+                throw std::invalid_argument(
+                    "Fault plan does not target this sender context"
+                );
+            }
+
+            m_runSender.configureFault(detFault.varFaultDetails());
+            const ArchiveContextKey keyArchive(
+                detFault.strTargetSenderId(),
+                detFault.u64ChainId()
+            );
+            auto itrArchive = m_mapArchiveContexts.find(keyArchive);
+            if (itrArchive != m_mapArchiveContexts.end())
+            {
+                ArchiveContext& ctxArchive = itrArchive->second;
+                ctxArchive.u64RandomSeed = 0;
+                if (const auto* pLoss = std::get_if<
+                        protocol::PacketLossFaultDetails
+                    >(&detFault.varFaultDetails()))
+                {
+                    ctxArchive.strConfiguredFault = "PACKET_LOSS";
+                    ctxArchive.strConfiguredFaultValue =
+                        "rate=" + std::to_string(pLoss->dLossRatePercent())
+                        + ";protectedGroup="
+                        + std::to_string(pLoss->u32ProtectedGroupSize());
+                    ctxArchive.u64RandomSeed = pLoss->u64RandomSeed();
+                }
+                else if (const auto* pDisconnect = std::get_if<
+                        protocol::LogicalDisconnectFaultDetails
+                    >(&detFault.varFaultDetails()))
+                {
+                    ctxArchive.strConfiguredFault = "LOGICAL_DISCONNECT";
+                    ctxArchive.strConfiguredFaultValue =
+                        "startPacket="
+                        + std::to_string(pDisconnect->u32StartPacketIndex())
+                        + ";durationMs="
+                        + std::to_string(pDisconnect->u32DurationMilliseconds())
+                        + ";protectedGroup="
+                        + std::to_string(pDisconnect->u32ProtectedGroupSize());
+                }
+                else
+                {
+                    const auto& detDelay = std::get<
+                        protocol::FixedDelayFaultDetails
+                    >(detFault.varFaultDetails());
+                    ctxArchive.strConfiguredFault = "FIXED_DELAY";
+                    ctxArchive.strConfiguredFaultValue =
+                        "delayMs="
+                        + std::to_string(detDelay.u32DelayMilliseconds());
+                }
+            }
+            return protocol::NodeControlMessage(
+                protocol::ExperimentControlAcknowledgementDetails(
+                    detFault.strRequestId(),
+                    detFault.strRoundId(),
+                    true,
+                    "",
+                    "Authentication fault plan accepted"
+                )
+            );
+        }
+        catch (const std::exception& exError)
+        {
+            return protocol::NodeControlMessage(
+                protocol::ExperimentControlAcknowledgementDetails(
+                    detFault.strRequestId(),
+                    detFault.strRoundId(),
+                    false,
+                    "FAULT_PLAN_REJECTED",
+                    exError.what()
+                )
+            );
+        }
+    }
+
+    protocol::NodeControlMessage msgApplyAttackSourceMapping(
+        const protocol::AttackSourceMappingControlDetails& detMapping
+    )
+    {
+        try
+        {
+            m_runReceiver.applyAttackSourceMapping(detMapping);
+            return protocol::NodeControlMessage(
+                protocol::ExperimentControlAcknowledgementDetails(
+                    detMapping.strRequestId(),
+                    detMapping.strRoundId(),
+                    true,
+                    "",
+                    detMapping.actAction()
+                            == protocol::AttackSourceMappingAction::Install
+                        ? "Temporary attack source mapping installed"
+                        : "Temporary attack source mapping cleared"
+                )
+            );
+        }
+        catch (const std::exception& exError)
+        {
+            return protocol::NodeControlMessage(
+                protocol::ExperimentControlAcknowledgementDetails(
+                    detMapping.strRequestId(),
+                    detMapping.strRoundId(),
+                    false,
+                    "ATTACK_SOURCE_MAPPING_REJECTED",
+                    exError.what()
+                )
             );
         }
     }
@@ -781,6 +1180,7 @@ private:
             {
                 m_runSender.stop();
                 m_runReceiver.stop();
+                m_runSender.clearFault();
             }
 
             return msgRoundAcknowledgement(
@@ -806,6 +1206,164 @@ private:
                 exError.what()
             );
         }
+    }
+
+    std::optional<metrics::AuthenticationRoundArchiveSummary> optCreateArchive(
+        const AuthenticationRuntimeResult& resResult,
+        protocol::AuthenticationRoundResultRole roleResult
+    ) const
+    {
+        ArchiveContext ctxArchive = [&]()
+        {
+            std::lock_guard<std::mutex> lckConfig(m_mtxConfig);
+            const auto itrArchive = m_mapArchiveContexts.find(ArchiveContextKey(
+                resResult.strSenderId(),
+                resResult.u64ChainId()
+            ));
+            if (itrArchive == m_mapArchiveContexts.end())
+            {
+                throw std::logic_error("Round archive configuration is missing");
+            }
+
+            return itrArchive->second;
+        }();
+
+        bool bValidSample = bValidArchiveSample(resResult.statusResult());
+        std::string strInvalidReason = bValidSample
+            ? std::string()
+            : resResult.strMessage();
+        metrics::AuthenticationRoundArchiveDetails varArchiveDetails =
+            metrics::SenderRoundArchiveDetails(0, "NONE", "", 0, 0);
+        metrics::AuthenticationRoundArchiveConfiguration cfgFinal =
+            ctxArchive.cfgConfiguration;
+
+        if (roleResult == protocol::AuthenticationRoundResultRole::Sender)
+        {
+            std::uint64_t u64FileSize = 0;
+            if (const auto* pFile = std::get_if<
+                    FileSenderAuthenticationRuntimeResultDetails
+                >(&resResult.varResultDetails()))
+            {
+                u64FileSize = pFile->u64OriginalByteCount();
+            }
+
+            varArchiveDetails = metrics::SenderRoundArchiveDetails(
+                resResult.u32ReceivedPacketCount(),
+                ctxArchive.strConfiguredFault,
+                ctxArchive.strConfiguredFaultValue,
+                ctxArchive.u64RandomSeed,
+                u64FileSize
+            );
+        }
+        else
+        {
+            std::uint32_t u32FallbackGroupCount = 0;
+            std::uint64_t u64VerifyTimeNanoseconds = 0;
+            std::uint64_t u64ReceivedAuthBytes = 0;
+            double dEstimatedEnergyMicroJoule = 0.0;
+            bool bEnergySummaryFound = false;
+            const std::vector<metrics::AuthenticationMetricRecord> vecMetrics =
+                m_stoMetrics.vecSnapshot();
+            for (auto itrMetric = vecMetrics.rbegin();
+                itrMetric != vecMetrics.rend(); ++itrMetric)
+            {
+                const auto* pEnergy = std::get_if<
+                    metrics::EstimatedEnergyMetricSummary
+                >(&*itrMetric);
+                if (pEnergy == nullptr
+                    || pEnergy->strRoundId() != resResult.strRoundId()
+                    || pEnergy->strSenderId() != resResult.strSenderId()
+                    || pEnergy->u64ChainId() != resResult.u64ChainId())
+                {
+                    continue;
+                }
+
+                u64VerifyTimeNanoseconds = pEnergy->u64VerifyTimeNanoseconds();
+                u64ReceivedAuthBytes = pEnergy->u64ReceivedAuthBytes();
+                dEstimatedEnergyMicroJoule =
+                    pEnergy->dEstimatedEnergyMicroJoule();
+                if (const auto* pImproved = std::get_if<
+                        metrics::ImprovedRoundMetricDetails
+                    >(&pEnergy->varDetails()))
+                {
+                    u32FallbackGroupCount =
+                        pImproved->u32FallbackGroupCount();
+                }
+                bEnergySummaryFound = true;
+                break;
+            }
+
+            if (!bEnergySummaryFound)
+            {
+                bValidSample = false;
+                strInvalidReason = "METRIC_SUMMARY_UNAVAILABLE";
+            }
+
+            std::uint64_t u64FileSize = 0;
+            std::uint64_t u64RecoveredFileSize = 0;
+            std::string strRecoveredFileHash;
+            if (const auto* pFile = std::get_if<
+                    FileReceiverAuthenticationRuntimeResultDetails
+                >(&resResult.varResultDetails()))
+            {
+                u64FileSize = pFile->u64OriginalByteCount();
+                u64RecoveredFileSize = pFile->vecRecoveredFileBytes().size();
+                if (pFile->optRecoveredSha256().has_value())
+                {
+                    strRecoveredFileHash =
+                        protocol::AuthenticationControlValueCodec::strEncodeBlock(
+                            arrMap(pFile->optRecoveredSha256().value())
+                        );
+                }
+            }
+            else if (const auto* pText = std::get_if<
+                         TextAuthenticationRuntimeResultDetails
+                     >(&resResult.varResultDetails());
+                     pText != nullptr && !pText->strRecoveredText().empty())
+            {
+                cfgFinal = cfgWithPayloadHash(
+                    cfgFinal,
+                    strPayloadSha256(pText->strRecoveredText())
+                );
+            }
+
+            if (!strRecoveredFileHash.empty())
+            {
+                cfgFinal = cfgWithPayloadHash(
+                    cfgFinal,
+                    strRecoveredFileHash
+                );
+            }
+
+            varArchiveDetails = metrics::ReceiverRoundArchiveDetails(
+                resResult.u32ReceivedPacketCount(),
+                resResult.u32AuthenticatedPacketCount(),
+                resResult.u32FailedPacketCount(),
+                resResult.u32MissingPacketCount(),
+                u32FallbackGroupCount,
+                u64VerifyTimeNanoseconds,
+                u64ReceivedAuthBytes,
+                dEstimatedEnergyMicroJoule,
+                u64FileSize,
+                u64RecoveredFileSize,
+                std::move(strRecoveredFileHash)
+            );
+        }
+
+        return metrics::AuthenticationRoundArchiveSummary(
+            u64NowMilliseconds(),
+            strExperimentId(ctxArchive.cfgConfiguration),
+            resResult.strRoundId(),
+            TESLA_GIT_COMMIT,
+            m_strNodeName,
+            resResult.strSenderId(),
+            resResult.u64ChainId(),
+            std::move(cfgFinal),
+            strArchiveStatus(resResult.statusResult()),
+            bValidSample,
+            std::move(strInvalidReason),
+            std::move(varArchiveDetails)
+        );
     }
 
     void emitResult(
@@ -879,6 +1437,21 @@ private:
                         detFile.vecRecoveredFileBytes().size(),
                         std::move(optRecoveredSha256)
                     );
+            }
+
+            try
+            {
+                const auto optArchive = optCreateArchive(resResult, roleResult);
+                if (optArchive.has_value())
+                {
+                    processMetric(metrics::AuthenticationMetricRecord(
+                        std::move(optArchive.value())
+                    ));
+                }
+            }
+            catch (...)
+            {
+                // 归档失败不得阻断协议要求的最终轮次结果上报。
             }
 
             m_fnControlEventHandler(protocol::NodeControlMessage(
@@ -1007,6 +1580,7 @@ private:
     metrics::AuthenticationMetricStore m_stoMetrics;
     mutable std::mutex m_mtxConfig;
     std::optional<SenderAuthenticationContext> m_optSenderContext;
+    std::map<ArchiveContextKey, ArchiveContext> m_mapArchiveContexts;
     AuthenticationSenderRuntime m_runSender;
     AuthenticationReceiverRuntime m_runReceiver;
 };

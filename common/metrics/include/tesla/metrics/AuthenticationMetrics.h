@@ -308,10 +308,175 @@ private:
     CommunicationCostDetails m_varDetails;
 };
 
+/** @brief 一轮归档中可复现实验配置的公共字段。 */
+class AuthenticationRoundArchiveConfiguration final
+{
+public:
+    AuthenticationRoundArchiveConfiguration(
+        AuthenticationMetricMode modeAuthentication,
+        std::string strCryptoAlgorithm,
+        std::string strPayloadHash,
+        std::uint32_t u32PacketCount,
+        std::uint32_t u32PacketsPerInterval,
+        std::uint32_t u32IntervalMilliseconds,
+        std::uint32_t u32DisclosureDelay,
+        std::uint32_t u32GroupSize,
+        std::uint32_t u32DetectionThreshold
+    );
+
+    AuthenticationMetricMode modeAuthentication() const noexcept;
+    const std::string& strCryptoAlgorithm() const noexcept;
+    const std::string& strPayloadHash() const noexcept;
+    std::uint32_t u32PacketCount() const noexcept;
+    std::uint32_t u32PacketsPerInterval() const noexcept;
+    std::uint32_t u32IntervalMilliseconds() const noexcept;
+    std::uint32_t u32DisclosureDelay() const noexcept;
+    std::uint32_t u32GroupSize() const noexcept;
+    std::uint32_t u32DetectionThreshold() const noexcept;
+
+private:
+    AuthenticationMetricMode m_modeAuthentication;
+    std::string               m_strCryptoAlgorithm;
+    std::string               m_strPayloadHash;
+    std::uint32_t             m_u32PacketCount;
+    std::uint32_t             m_u32PacketsPerInterval;
+    std::uint32_t             m_u32IntervalMilliseconds;
+    std::uint32_t             m_u32DisclosureDelay;
+    std::uint32_t             m_u32GroupSize;
+    std::uint32_t             m_u32DetectionThreshold;
+};
+
+/** @brief Sender逐轮归档详情，只保存发送和本地故障计划数据。 */
+class SenderRoundArchiveDetails final
+{
+public:
+    SenderRoundArchiveDetails(
+        std::uint32_t u32SentPacketCount,
+        std::string strConfiguredFault,
+        std::string strConfiguredFaultValue,
+        std::uint64_t u64RandomSeed,
+        std::uint64_t u64FileSize
+    );
+
+    std::uint32_t u32SentPacketCount() const noexcept;
+    const std::string& strConfiguredFault() const noexcept;
+    const std::string& strConfiguredFaultValue() const noexcept;
+    std::uint64_t u64RandomSeed() const noexcept;
+    std::uint64_t u64FileSize() const noexcept;
+
+private:
+    std::uint32_t m_u32SentPacketCount;
+    std::string   m_strConfiguredFault;
+    std::string   m_strConfiguredFaultValue;
+    std::uint64_t m_u64RandomSeed;
+    std::uint64_t m_u64FileSize;
+};
+
+/** @brief Receiver逐轮归档详情，集中保存认证结果、指标和文件恢复结果。 */
+class ReceiverRoundArchiveDetails final
+{
+public:
+    ReceiverRoundArchiveDetails(
+        std::uint32_t u32ReceivedPacketCount,
+        std::uint32_t u32AuthenticatedPacketCount,
+        std::uint32_t u32FailedPacketCount,
+        std::uint32_t u32MissingPacketCount,
+        std::uint32_t u32FallbackGroupCount,
+        std::uint64_t u64VerifyTimeNanoseconds,
+        std::uint64_t u64ReceivedAuthBytes,
+        double dEstimatedEnergyMicroJoule,
+        std::uint64_t u64FileSize,
+        std::uint64_t u64RecoveredFileSize,
+        std::string strRecoveredFileHash
+    );
+
+    std::uint32_t u32ReceivedPacketCount() const noexcept;
+    std::uint32_t u32AuthenticatedPacketCount() const noexcept;
+    std::uint32_t u32FailedPacketCount() const noexcept;
+    std::uint32_t u32MissingPacketCount() const noexcept;
+    std::uint32_t u32FallbackGroupCount() const noexcept;
+    std::uint64_t u64VerifyTimeNanoseconds() const noexcept;
+    std::uint64_t u64ReceivedAuthBytes() const noexcept;
+    double dEstimatedEnergyMicroJoule() const noexcept;
+    std::uint64_t u64FileSize() const noexcept;
+    std::uint64_t u64RecoveredFileSize() const noexcept;
+    const std::string& strRecoveredFileHash() const noexcept;
+
+private:
+    std::uint32_t m_u32ReceivedPacketCount;
+    std::uint32_t m_u32AuthenticatedPacketCount;
+    std::uint32_t m_u32FailedPacketCount;
+    std::uint32_t m_u32MissingPacketCount;
+    std::uint32_t m_u32FallbackGroupCount;
+    std::uint64_t m_u64VerifyTimeNanoseconds;
+    std::uint64_t m_u64ReceivedAuthBytes;
+    double        m_dEstimatedEnergyMicroJoule;
+    std::uint64_t m_u64FileSize;
+    std::uint64_t m_u64RecoveredFileSize;
+    std::string   m_strRecoveredFileHash;
+};
+
+using AuthenticationRoundArchiveDetails = std::variant<
+    SenderRoundArchiveDetails,
+    ReceiverRoundArchiveDetails
+>;
+
+/**
+ * @brief 节点生成的逐轮可追溯记录，公共配置与角色专用结果使用variant隔离。
+ *
+ * payloadHash在Sender接受载荷或Receiver成功恢复后生成；恢复未完成时允许为空。
+ */
+class AuthenticationRoundArchiveSummary final
+{
+public:
+    AuthenticationRoundArchiveSummary(
+        std::uint64_t u64TimestampMilliseconds,
+        std::string strExperimentId,
+        std::string strRunId,
+        std::string strGitCommit,
+        std::string strNodeId,
+        std::string strSenderId,
+        std::uint64_t u64ChainId,
+        AuthenticationRoundArchiveConfiguration cfgConfiguration,
+        std::string strRoundStatus,
+        bool bValidSample,
+        std::string strInvalidReason,
+        AuthenticationRoundArchiveDetails varDetails
+    );
+
+    std::uint64_t u64TimestampMilliseconds() const noexcept;
+    const std::string& strExperimentId() const noexcept;
+    const std::string& strRunId() const noexcept;
+    const std::string& strGitCommit() const noexcept;
+    const std::string& strNodeId() const noexcept;
+    const std::string& strSenderId() const noexcept;
+    std::uint64_t u64ChainId() const noexcept;
+    const AuthenticationRoundArchiveConfiguration& cfgConfiguration() const noexcept;
+    const std::string& strRoundStatus() const noexcept;
+    bool bValidSample() const noexcept;
+    const std::string& strInvalidReason() const noexcept;
+    const AuthenticationRoundArchiveDetails& varDetails() const noexcept;
+
+private:
+    std::uint64_t                         m_u64TimestampMilliseconds;
+    std::string                           m_strExperimentId;
+    std::string                           m_strRunId;
+    std::string                           m_strGitCommit;
+    std::string                           m_strNodeId;
+    std::string                           m_strSenderId;
+    std::uint64_t                         m_u64ChainId;
+    AuthenticationRoundArchiveConfiguration m_cfgConfiguration;
+    std::string                           m_strRoundStatus;
+    bool                                  m_bValidSample;
+    std::string                           m_strInvalidReason;
+    AuthenticationRoundArchiveDetails    m_varDetails;
+};
+
 using AuthenticationMetricRecord = std::variant<
     VerificationMetricSample,
     EstimatedEnergyMetricSummary,
-    CommunicationCostMetricSummary
+    CommunicationCostMetricSummary,
+    AuthenticationRoundArchiveSummary
 >;
 
 /** @brief 固定文献系数能耗模型，不接受外部功率传感器输入。 */

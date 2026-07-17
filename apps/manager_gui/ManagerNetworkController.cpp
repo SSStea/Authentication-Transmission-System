@@ -268,6 +268,7 @@ ManagerNetworkController::ManagerNetworkController(
 )
     : QObject(pParent),
       m_u16DiscoveryPort(u16DiscoveryPort),
+      m_setDiscoveryScanPorts({u16DiscoveryPort}),
       m_durOfflineTimeout(durOfflineTimeout),
       m_pScanSocket(new QUdpSocket(this)),
       m_pHeartbeatSocket(new QUdpSocket(this)),
@@ -347,6 +348,18 @@ void ManagerNetworkController::stop() noexcept
     m_pHeartbeatSocket->close();
 }
 
+void ManagerNetworkController::addDiscoveryScanPort(
+    std::uint16_t u16DiscoveryPort
+)
+{
+    if (u16DiscoveryPort == 0)
+    {
+        return;
+    }
+
+    m_setDiscoveryScanPorts.insert(u16DiscoveryPort);
+}
+
 void ManagerNetworkController::scanNodes()
 {
     start();
@@ -389,15 +402,18 @@ void ManagerNetworkController::scanNodes()
     }
 
     int nSentTargetCount = 0;
-    for (const QHostAddress& adrTarget : setTargets)
+    for (std::uint16_t u16ScanPort : m_setDiscoveryScanPorts)
     {
-        if (m_pScanSocket->writeDatagram(
-                arrDatagram,
-                adrTarget,
-                m_u16DiscoveryPort
-            ) == arrDatagram.size())
+        for (const QHostAddress& adrTarget : setTargets)
         {
-            ++nSentTargetCount;
+            if (m_pScanSocket->writeDatagram(
+                    arrDatagram,
+                    adrTarget,
+                    u16ScanPort
+                ) == arrDatagram.size())
+            {
+                ++nSentTargetCount;
+            }
         }
     }
 
@@ -464,6 +480,26 @@ bool ManagerNetworkController::bSendNodeControl(
     return bSendJsonFrame(
         ptrEndpoint->pSocket,
         NodeControlJsonCodec::strEncode(msgMessage)
+    );
+}
+
+bool ManagerNetworkController::bSendAttackControl(
+    const QString& strEndpointKey,
+    const AttackControlMessage& msgMessage
+)
+{
+    const std::shared_ptr<EndpointState> ptrEndpoint =
+        m_mapEndpoints.value(strEndpointKey);
+    if (!ptrEndpoint
+        || ptrEndpoint->roleNode != NodeRole::Attacker
+        || ptrEndpoint->stateConnection != ManagerConnectionState::Connected)
+    {
+        return false;
+    }
+
+    return bSendJsonFrame(
+        ptrEndpoint->pSocket,
+        AttackControlJsonCodec::strEncode(msgMessage)
     );
 }
 
@@ -883,6 +919,9 @@ void ManagerNetworkController::processNodeControlFrame(
     }
 
     const NodeControlMessage& msgMessage = std::get<NodeControlMessage>(resMessage);
+    // 已通过强类型解码的TCP响应同样证明节点在线，避免同机UDP复用或丢包误离线。
+    ptrEndpoint->nLastPresenceMilliseconds =
+        QDateTime::currentMSecsSinceEpoch();
     if (msgMessage.typeMessage() != NodeControlMessageType::StatusResponse
         && msgMessage.typeMessage() != NodeControlMessageType::Pong)
     {
@@ -928,6 +967,17 @@ void ManagerNetworkController::processAttackControlFrame(
 
     const AttackControlMessage& msgMessage =
         std::get<AttackControlMessage>(resMessage);
+    ptrEndpoint->nLastPresenceMilliseconds =
+        QDateTime::currentMSecsSinceEpoch();
+    if (msgMessage.typeMessage() != AttackControlMessageType::StatusResponse
+        && msgMessage.typeMessage() != AttackControlMessageType::Pong)
+    {
+        emit attackControlJsonReceived(
+            ptrEndpoint->strKey,
+            QString::fromStdString(strJson)
+        );
+    }
+
     if (msgMessage.typeMessage() == AttackControlMessageType::StatusResponse)
     {
         const AttackStatusControlDetails& detStatus =

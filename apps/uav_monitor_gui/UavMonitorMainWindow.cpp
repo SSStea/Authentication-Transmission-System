@@ -253,7 +253,10 @@ void UavMonitorMainWindow::refreshAuthenticationViews()
 
 void UavMonitorMainWindow::refreshAuthenticationMetrics()
 {
-    m_ptrMetricsView->setRecords(m_ctlNetwork.vecMetricSnapshot());
+    const std::vector<tesla::metrics::AuthenticationMetricRecord> vecMetrics =
+        m_ctlNetwork.vecMetricSnapshot();
+    m_ptrMetricsView->setRecords(vecMetrics);
+    m_pAuthenticationMonitor->setMetricSnapshots(vecMetrics);
 }
 
 void UavMonitorMainWindow::refreshStatus()

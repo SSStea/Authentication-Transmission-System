@@ -13,6 +13,7 @@ target_link_libraries(tesla_common_gui
     PUBLIC
         Qt6::Core
         Qt6::Widgets
+        tesla_metrics
         tesla_protocol
 )
 

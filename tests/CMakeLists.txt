@@ -6,6 +6,7 @@ add_subdirectory(stage6_tests)
 add_subdirectory(stage7_tests)
 add_subdirectory(stage8_tests)
 add_subdirectory(stage9_tests)
+add_subdirectory(stage10_tests)
 
 if(WIN32 AND BUILD_GUI)
     add_subdirectory(gui_stage5_tests)

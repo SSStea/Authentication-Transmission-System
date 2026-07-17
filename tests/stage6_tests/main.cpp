@@ -496,11 +496,73 @@ bool bRunEndToEnd(
 
     const auto vecSenderResults = colSenderResults.vecResults();
     const auto vecReceiverResults = colReceiverResults.vecResults();
+    const auto vecSenderMetrics = runSender.vecMetricSnapshot();
+    const auto vecReceiverMetrics = runReceiver.vecMetricSnapshot();
     const auto& detSender = vecSenderResults.front();
     const auto& detReceiver = vecReceiverResults.front();
     const auto& detRecoveredText = std::get<
         protocol::TextAuthenticationRoundResultDetails
     >(detReceiver.varResultDetails());
+
+    // 最终结果回调前必须已经生成可导出的逐轮记录，避免GUI只看到结果而没有原始数据。
+    const auto itrSenderArchive = std::find_if(
+        vecSenderMetrics.begin(),
+        vecSenderMetrics.end(),
+        [&strRoundId](const metrics::AuthenticationMetricRecord& varMetric)
+        {
+            const auto* pArchive = std::get_if<
+                metrics::AuthenticationRoundArchiveSummary
+            >(&varMetric);
+            return pArchive != nullptr
+                && pArchive->strRunId() == strRoundId
+                && std::holds_alternative<metrics::SenderRoundArchiveDetails>(
+                    pArchive->varDetails()
+                );
+        }
+    );
+    const auto itrReceiverArchive = std::find_if(
+        vecReceiverMetrics.begin(),
+        vecReceiverMetrics.end(),
+        [&strRoundId](const metrics::AuthenticationMetricRecord& varMetric)
+        {
+            const auto* pArchive = std::get_if<
+                metrics::AuthenticationRoundArchiveSummary
+            >(&varMetric);
+            return pArchive != nullptr
+                && pArchive->strRunId() == strRoundId
+                && std::holds_alternative<metrics::ReceiverRoundArchiveDetails>(
+                    pArchive->varDetails()
+                );
+        }
+    );
+    const bool bArchivesPresent =
+        itrSenderArchive != vecSenderMetrics.end()
+        && itrReceiverArchive != vecReceiverMetrics.end();
+    bool bArchivesValid = false;
+    if (bArchivesPresent)
+    {
+        const auto& sumSender = std::get<
+            metrics::AuthenticationRoundArchiveSummary
+        >(*itrSenderArchive);
+        const auto& sumReceiver = std::get<
+            metrics::AuthenticationRoundArchiveSummary
+        >(*itrReceiverArchive);
+        const auto& detSenderArchive = std::get<
+            metrics::SenderRoundArchiveDetails
+        >(sumSender.varDetails());
+        const auto& detReceiverArchive = std::get<
+            metrics::ReceiverRoundArchiveDetails
+        >(sumReceiver.varDetails());
+        bArchivesValid = sumSender.bValidSample()
+            && sumReceiver.bValidSample()
+            && sumSender.strGitCommit().size() > 0
+            && sumSender.cfgConfiguration().strPayloadHash().size() == 64
+            && sumSender.cfgConfiguration().strPayloadHash()
+                == sumReceiver.cfgConfiguration().strPayloadHash()
+            && detSenderArchive.strConfiguredFault() == "NONE"
+            && detReceiverArchive.u32AuthenticatedPacketCount()
+                == u32PacketCount;
+    }
     const bool bPassed = detSender.statusResult()
             == protocol::AuthenticationRoundResultStatus::Completed
         && detReceiver.statusResult()
@@ -508,7 +570,8 @@ bool bRunEndToEnd(
         && detReceiver.u32AuthenticatedPacketCount() == u32PacketCount
         && detReceiver.u32FailedPacketCount() == 0
         && detReceiver.u32MissingPacketCount() == 0
-        && detRecoveredText.strRecoveredText() == "helloworld";
+        && detRecoveredText.strRecoveredText() == "helloworld"
+        && bArchivesValid;
     if (!bPassed)
     {
         std::cerr
@@ -524,6 +587,8 @@ bool bRunEndToEnd(
             << ", message=" << detReceiver.strMessage()
             << ", sent=" << u32SentDatagrams.load()
             << ", enqueued=" << u32AcceptedDatagrams.load()
+            << ", archives=" << bArchivesPresent
+            << ", archiveValid=" << bArchivesValid
             << std::endl;
     }
     return bPassed;

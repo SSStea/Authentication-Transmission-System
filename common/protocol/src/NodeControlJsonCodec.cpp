@@ -40,6 +40,12 @@ const char* pTypeName(NodeControlMessageType typeMessage)
         return "FILE_UPLOAD_END";
     case NodeControlMessageType::AuthenticationConfigAcknowledgement:
         return "AUTH_CONFIG_ACK";
+    case NodeControlMessageType::FaultInjectionConfig:
+        return "FAULT_INJECTION_CONFIG";
+    case NodeControlMessageType::AttackSourceMapping:
+        return "ATTACK_SOURCE_MAPPING";
+    case NodeControlMessageType::ExperimentControlAcknowledgement:
+        return "EXPERIMENT_CONTROL_ACK";
     case NodeControlMessageType::RoundStart:
         return "ROUND_START";
     case NodeControlMessageType::RoundPause:
@@ -1358,6 +1364,78 @@ nlohmann::json jsnEncodeMetricRecord(
         };
     }
 
+    if (const auto* pArchive = std::get_if<
+            metrics::AuthenticationRoundArchiveSummary
+        >(&varRecord))
+    {
+        const metrics::AuthenticationRoundArchiveConfiguration& cfgArchive =
+            pArchive->cfgConfiguration();
+        nlohmann::json jsnDetails;
+        if (const auto* pSender = std::get_if<metrics::SenderRoundArchiveDetails>(
+                &pArchive->varDetails()
+            ))
+        {
+            jsnDetails = {
+                {"type", "SENDER"},
+                {"sentPackets", pSender->u32SentPacketCount()},
+                {"configuredFault", pSender->strConfiguredFault()},
+                {"configuredFaultValue", pSender->strConfiguredFaultValue()},
+                {"randomSeed", pSender->u64RandomSeed()},
+                {"fileSize", pSender->u64FileSize()}
+            };
+        }
+        else
+        {
+            const auto& detReceiver = std::get<
+                metrics::ReceiverRoundArchiveDetails
+            >(pArchive->varDetails());
+            jsnDetails = {
+                {"type", "RECEIVER"},
+                {"receivedPackets", detReceiver.u32ReceivedPacketCount()},
+                {"authenticatedPackets", detReceiver.u32AuthenticatedPacketCount()},
+                {"failedPackets", detReceiver.u32FailedPacketCount()},
+                {"missingPackets", detReceiver.u32MissingPacketCount()},
+                {"fallbackGroupCount", detReceiver.u32FallbackGroupCount()},
+                {"verifyTimeNs", detReceiver.u64VerifyTimeNanoseconds()},
+                {"receivedAuthBytes", detReceiver.u64ReceivedAuthBytes()},
+                {"estimatedEnergyMicroJoule", detReceiver.dEstimatedEnergyMicroJoule()},
+                {"fileSize", detReceiver.u64FileSize()},
+                {"recoveredFileSize", detReceiver.u64RecoveredFileSize()},
+                {"recoveredFileHash", detReceiver.strRecoveredFileHash()}
+            };
+        }
+
+        return {
+            {"recordType", "ROUND_ARCHIVE_SUMMARY"},
+            {"timestampMs", pArchive->u64TimestampMilliseconds()},
+            {"experimentId", pArchive->strExperimentId()},
+            {"runId", pArchive->strRunId()},
+            {"gitCommit", pArchive->strGitCommit()},
+            {"nodeId", pArchive->strNodeId()},
+            {"senderId", pArchive->strSenderId()},
+            {"chainId", AuthenticationControlValueCodec::strEncodeChainId(
+                pArchive->u64ChainId()
+            )},
+            {"configuration", {
+                {"mode", cfgArchive.modeAuthentication()
+                        == metrics::AuthenticationMetricMode::Native
+                    ? "NATIVE" : "IMPROVED"},
+                {"cryptoAlgorithm", cfgArchive.strCryptoAlgorithm()},
+                {"payloadHash", cfgArchive.strPayloadHash()},
+                {"packetCount", cfgArchive.u32PacketCount()},
+                {"packetsPerInterval", cfgArchive.u32PacketsPerInterval()},
+                {"intervalMs", cfgArchive.u32IntervalMilliseconds()},
+                {"disclosureDelay", cfgArchive.u32DisclosureDelay()},
+                {"groupSize", cfgArchive.u32GroupSize()},
+                {"detectionThreshold", cfgArchive.u32DetectionThreshold()}
+            }},
+            {"roundStatus", pArchive->strRoundStatus()},
+            {"validSample", pArchive->bValidSample()},
+            {"invalidReason", pArchive->strInvalidReason()},
+            {"details", std::move(jsnDetails)}
+        };
+    }
+
     const auto& sumCommunication = std::get<
         metrics::CommunicationCostMetricSummary
     >(varRecord);
@@ -1411,6 +1489,75 @@ metrics::AuthenticationMetricRecord varDecodeMetricRecord(
         );
     const nlohmann::json& jsnDetails = jsnRecord.at("details");
     const std::string strDetailType = jsnDetails.at("type").get<std::string>();
+
+    if (strRecordType == "ROUND_ARCHIVE_SUMMARY")
+    {
+        const nlohmann::json& jsnConfiguration = jsnRecord.at("configuration");
+        const std::string strMode =
+            jsnConfiguration.at("mode").get<std::string>();
+        if (strMode != "NATIVE" && strMode != "IMPROVED")
+        {
+            throw std::invalid_argument("Unknown round archive authentication mode");
+        }
+
+        metrics::AuthenticationRoundArchiveDetails varDetails =
+            strDetailType == "SENDER"
+            ? metrics::AuthenticationRoundArchiveDetails(
+                metrics::SenderRoundArchiveDetails(
+                    jsnDetails.at("sentPackets").get<std::uint32_t>(),
+                    jsnDetails.at("configuredFault").get<std::string>(),
+                    jsnDetails.at("configuredFaultValue").get<std::string>(),
+                    jsnDetails.at("randomSeed").get<std::uint64_t>(),
+                    jsnDetails.at("fileSize").get<std::uint64_t>()
+                )
+            )
+            : metrics::AuthenticationRoundArchiveDetails(
+                metrics::ReceiverRoundArchiveDetails(
+                    jsnDetails.at("receivedPackets").get<std::uint32_t>(),
+                    jsnDetails.at("authenticatedPackets").get<std::uint32_t>(),
+                    jsnDetails.at("failedPackets").get<std::uint32_t>(),
+                    jsnDetails.at("missingPackets").get<std::uint32_t>(),
+                    jsnDetails.at("fallbackGroupCount").get<std::uint32_t>(),
+                    jsnDetails.at("verifyTimeNs").get<std::uint64_t>(),
+                    jsnDetails.at("receivedAuthBytes").get<std::uint64_t>(),
+                    jsnDetails.at("estimatedEnergyMicroJoule").get<double>(),
+                    jsnDetails.at("fileSize").get<std::uint64_t>(),
+                    jsnDetails.at("recoveredFileSize").get<std::uint64_t>(),
+                    jsnDetails.at("recoveredFileHash").get<std::string>()
+                )
+            );
+        if (strDetailType != "SENDER" && strDetailType != "RECEIVER")
+        {
+            throw std::invalid_argument("Unknown round archive detail type");
+        }
+
+        return metrics::AuthenticationRoundArchiveSummary(
+            jsnRecord.at("timestampMs").get<std::uint64_t>(),
+            jsnRecord.at("experimentId").get<std::string>(),
+            jsnRecord.at("runId").get<std::string>(),
+            jsnRecord.at("gitCommit").get<std::string>(),
+            jsnRecord.at("nodeId").get<std::string>(),
+            jsnRecord.at("senderId").get<std::string>(),
+            u64ChainId,
+            metrics::AuthenticationRoundArchiveConfiguration(
+                strMode == "NATIVE"
+                    ? metrics::AuthenticationMetricMode::Native
+                    : metrics::AuthenticationMetricMode::Improved,
+                jsnConfiguration.at("cryptoAlgorithm").get<std::string>(),
+                jsnConfiguration.at("payloadHash").get<std::string>(),
+                jsnConfiguration.at("packetCount").get<std::uint32_t>(),
+                jsnConfiguration.at("packetsPerInterval").get<std::uint32_t>(),
+                jsnConfiguration.at("intervalMs").get<std::uint32_t>(),
+                jsnConfiguration.at("disclosureDelay").get<std::uint32_t>(),
+                jsnConfiguration.at("groupSize").get<std::uint32_t>(),
+                jsnConfiguration.at("detectionThreshold").get<std::uint32_t>()
+            ),
+            jsnRecord.at("roundStatus").get<std::string>(),
+            jsnRecord.at("validSample").get<bool>(),
+            jsnRecord.at("invalidReason").get<std::string>(),
+            std::move(varDetails)
+        );
+    }
 
     if (strRecordType == "VERIFICATION_SAMPLE")
     {
@@ -1660,6 +1807,80 @@ std::string NodeControlJsonCodec::strEncode(const NodeControlMessage& msgMessage
             );
         jsnMessage["requestId"] = detAcknowledgement.strRequestId();
         jsnMessage["target"] = pConfigTargetName(detAcknowledgement.targetConfig());
+        jsnMessage["accepted"] = detAcknowledgement.bAccepted();
+        jsnMessage["errorCode"] = detAcknowledgement.strErrorCode();
+        jsnMessage["message"] = detAcknowledgement.strMessage();
+    }
+    else if (msgMessage.typeMessage()
+        == NodeControlMessageType::FaultInjectionConfig)
+    {
+        const FaultInjectionControlDetails& detFault =
+            std::get<FaultInjectionControlDetails>(msgMessage.varDetails());
+        jsnMessage["requestId"] = detFault.strRequestId();
+        jsnMessage["roundId"] = detFault.strRoundId();
+        jsnMessage["targetSenderId"] = detFault.strTargetSenderId();
+        jsnMessage["chainId"] = AuthenticationControlValueCodec::strEncodeChainId(
+            detFault.u64ChainId()
+        );
+
+        const AuthenticationFaultDetails& varFault = detFault.varFaultDetails();
+        if (const auto* pLoss = std::get_if<PacketLossFaultDetails>(&varFault))
+        {
+            jsnMessage["faultType"] = "PACKET_LOSS";
+            jsnMessage["lossRatePercent"] = pLoss->dLossRatePercent();
+            jsnMessage["randomSeed"] = pLoss->u64RandomSeed();
+            jsnMessage["protectedGroupSize"] =
+                pLoss->u32ProtectedGroupSize();
+        }
+        else if (const auto* pDisconnect = std::get_if<
+                     LogicalDisconnectFaultDetails
+                 >(&varFault))
+        {
+            jsnMessage["faultType"] = "LOGICAL_DISCONNECT";
+            jsnMessage["startPacketIndex"] =
+                pDisconnect->u32StartPacketIndex();
+            jsnMessage["durationMs"] =
+                pDisconnect->u32DurationMilliseconds();
+            jsnMessage["protectedGroupSize"] =
+                pDisconnect->u32ProtectedGroupSize();
+        }
+        else
+        {
+            const FixedDelayFaultDetails& detDelay =
+                std::get<FixedDelayFaultDetails>(varFault);
+            jsnMessage["faultType"] = "FIXED_DELAY";
+            jsnMessage["delayMs"] = detDelay.u32DelayMilliseconds();
+        }
+    }
+    else if (msgMessage.typeMessage()
+        == NodeControlMessageType::AttackSourceMapping)
+    {
+        const AttackSourceMappingControlDetails& detMapping = std::get<
+            AttackSourceMappingControlDetails
+        >(msgMessage.varDetails());
+        jsnMessage["requestId"] = detMapping.strRequestId();
+        jsnMessage["roundId"] = detMapping.strRoundId();
+        jsnMessage["action"] =
+            detMapping.actAction() == AttackSourceMappingAction::Install
+            ? "INSTALL"
+            : "CLEAR";
+        jsnMessage["targetSenderId"] = detMapping.strTargetSenderId();
+        jsnMessage["targetSenderIp"] = detMapping.strTargetSenderIp();
+        jsnMessage["attackSourceIp"] = detMapping.strAttackSourceIp();
+        jsnMessage["chainId"] = AuthenticationControlValueCodec::strEncodeChainId(
+            detMapping.u64ChainId()
+        );
+        jsnMessage["expiresAtMs"] = detMapping.u64ExpiresAtMilliseconds();
+    }
+    else if (msgMessage.typeMessage()
+        == NodeControlMessageType::ExperimentControlAcknowledgement)
+    {
+        const ExperimentControlAcknowledgementDetails& detAcknowledgement =
+            std::get<ExperimentControlAcknowledgementDetails>(
+                msgMessage.varDetails()
+            );
+        jsnMessage["requestId"] = detAcknowledgement.strRequestId();
+        jsnMessage["roundId"] = detAcknowledgement.strRoundId();
         jsnMessage["accepted"] = detAcknowledgement.bAccepted();
         jsnMessage["errorCode"] = detAcknowledgement.strErrorCode();
         jsnMessage["message"] = detAcknowledgement.strMessage();
@@ -2018,6 +2239,92 @@ NodeControlDecodeResult NodeControlJsonCodec::resDecode(const std::string& strJs
                     jsnMessage.at("message").get<std::string>()
                 )
             );
+        }
+
+        if (strType == "FAULT_INJECTION_CONFIG")
+        {
+            const std::string strFaultType =
+                jsnMessage.at("faultType").get<std::string>();
+            AuthenticationFaultDetails varFault = FixedDelayFaultDetails(0);
+            if (strFaultType == "PACKET_LOSS")
+            {
+                varFault = PacketLossFaultDetails(
+                    jsnMessage.at("lossRatePercent").get<double>(),
+                    jsnMessage.at("randomSeed").get<std::uint64_t>(),
+                    jsnMessage.at("protectedGroupSize").get<std::uint32_t>()
+                );
+            }
+            else if (strFaultType == "LOGICAL_DISCONNECT")
+            {
+                varFault = LogicalDisconnectFaultDetails(
+                    jsnMessage.at("startPacketIndex").get<std::uint32_t>(),
+                    jsnMessage.at("durationMs").get<std::uint32_t>(),
+                    jsnMessage.at("protectedGroupSize").get<std::uint32_t>()
+                );
+            }
+            else if (strFaultType == "FIXED_DELAY")
+            {
+                varFault = FixedDelayFaultDetails(
+                    jsnMessage.at("delayMs").get<std::uint32_t>()
+                );
+            }
+            else
+            {
+                throw std::invalid_argument("Unknown authentication fault type");
+            }
+
+            return NodeControlMessage(FaultInjectionControlDetails(
+                jsnMessage.at("requestId").get<std::string>(),
+                jsnMessage.at("roundId").get<std::string>(),
+                jsnMessage.at("targetSenderId").get<std::string>(),
+                AuthenticationControlValueCodec::u64DecodeChainId(
+                    jsnMessage.at("chainId").get<std::string>()
+                ),
+                std::move(varFault)
+            ));
+        }
+
+        if (strType == "ATTACK_SOURCE_MAPPING")
+        {
+            const std::string strAction =
+                jsnMessage.at("action").get<std::string>();
+            AttackSourceMappingAction actAction;
+            if (strAction == "INSTALL")
+            {
+                actAction = AttackSourceMappingAction::Install;
+            }
+            else if (strAction == "CLEAR")
+            {
+                actAction = AttackSourceMappingAction::Clear;
+            }
+            else
+            {
+                throw std::invalid_argument("Unknown attack source mapping action");
+            }
+
+            return NodeControlMessage(AttackSourceMappingControlDetails(
+                jsnMessage.at("requestId").get<std::string>(),
+                jsnMessage.at("roundId").get<std::string>(),
+                actAction,
+                jsnMessage.at("targetSenderId").get<std::string>(),
+                jsnMessage.at("targetSenderIp").get<std::string>(),
+                jsnMessage.at("attackSourceIp").get<std::string>(),
+                AuthenticationControlValueCodec::u64DecodeChainId(
+                    jsnMessage.at("chainId").get<std::string>()
+                ),
+                jsnMessage.at("expiresAtMs").get<std::uint64_t>()
+            ));
+        }
+
+        if (strType == "EXPERIMENT_CONTROL_ACK")
+        {
+            return NodeControlMessage(ExperimentControlAcknowledgementDetails(
+                jsnMessage.at("requestId").get<std::string>(),
+                jsnMessage.at("roundId").get<std::string>(),
+                jsnMessage.at("accepted").get<bool>(),
+                jsnMessage.at("errorCode").get<std::string>(),
+                jsnMessage.at("message").get<std::string>()
+            ));
         }
 
         if (strType == "ROUND_START"

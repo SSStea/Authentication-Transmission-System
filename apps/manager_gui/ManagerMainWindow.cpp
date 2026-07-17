@@ -8,6 +8,8 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCryptographicHash>
+#include <QDateTime>
+#include <QDoubleSpinBox>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -17,6 +19,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QRandomGenerator>
 #include <QSpinBox>
 #include <QStatusBar>
 #include <QTabWidget>
@@ -68,13 +71,6 @@ QTableWidgetItem* pReadOnlyItem(const QString& strText)
     return pItem;
 }
 
-QPushButton* pDisabledStageButton(const QString& strText, const QString& strTip)
-{
-    QPushButton* pButton = new QPushButton(strText);
-    pButton->setEnabled(false);
-    pButton->setToolTip(strTip);
-    return pButton;
-}
 }
 
 ManagerMainWindow::ManagerMainWindow(
@@ -85,6 +81,7 @@ ManagerMainWindow::ManagerMainWindow(
       // 控制器是按值成员，由C++成员生命周期管理，不能再交给Qt父对象重复销毁。
       m_ctlNetwork(u16DiscoveryPort, std::chrono::milliseconds(3000), nullptr),
       m_ctlAuthentication(m_ctlNetwork, nullptr),
+      m_ctlAttackExperiment(m_ctlNetwork, m_ctlAuthentication, nullptr),
       m_pNodeTable(nullptr),
       m_pAttackTable(nullptr),
       m_pStatusLabel(new QLabel(QStringLiteral("就绪"), this)),
@@ -108,6 +105,22 @@ ManagerMainWindow::ManagerMainWindow(
       m_pPauseButton(nullptr),
       m_pResumeButton(nullptr),
       m_pStopButton(nullptr),
+      m_pFaultSenderCombo(nullptr),
+      m_pFaultTypeCombo(nullptr),
+      m_pFaultLossRateSpin(nullptr),
+      m_pFaultProtectedGroupSpin(nullptr),
+      m_pFaultStartPacketSpin(nullptr),
+      m_pFaultDurationSpin(nullptr),
+      m_pFaultDelaySpin(nullptr),
+      m_pFaultStateLabel(nullptr),
+      m_pFaultPrepareButton(nullptr),
+      m_pAttackEndpointCombo(nullptr),
+      m_pAttackSenderCombo(nullptr),
+      m_pAttackStateLabel(nullptr),
+      m_pAttackPlanLabel(nullptr),
+      m_pAttackPrepareButton(nullptr),
+      m_pAttackStopButton(nullptr),
+      m_pAttackEmergencyButton(nullptr),
       m_bAuthenticationInputsValid(false),
       m_bPreparedConfigurationCurrent(false)
 {
@@ -127,7 +140,7 @@ ManagerMainWindow::ManagerMainWindow(
     pTabs->addTab(pCreateNodePage(), QStringLiteral("节点连接"));
     pTabs->addTab(pCreateConfigurationPage(), QStringLiteral("参数与载荷"));
     pTabs->addTab(pCreateExperimentPage(), QStringLiteral("实验控制"));
-    pTabs->addTab(pCreateAttackPage(), QStringLiteral("攻击测试端"));
+    pTabs->addTab(pCreateAttackPage(), QStringLiteral("认证鲁棒性测试端"));
     pTabs->addTab(pCreateFileComparisonPage(), QStringLiteral("文件Hash比较"));
     pRootLayout->addWidget(pTabs, 1);
 
@@ -158,6 +171,8 @@ ManagerMainWindow::ManagerMainWindow(
         {
             m_pStatusLabel->setText(strMessage);
             refreshAuthenticationActions();
+            refreshFaultControls();
+            refreshAttackControls();
         }
     );
     connect(
@@ -167,7 +182,19 @@ ManagerMainWindow::ManagerMainWindow(
         [this](bool, bool)
         {
             refreshAuthenticationActions();
+            refreshFaultControls();
             refreshNodeTables();
+        }
+    );
+    connect(
+        &m_ctlAuthentication,
+        &ManagerAuthenticationController::faultPlanStateChanged,
+        this,
+        [this](bool, const QString& strMessage)
+        {
+            m_pStatusLabel->setText(strMessage);
+            refreshAuthenticationActions();
+            refreshFaultControls();
         }
     );
     connect(
@@ -232,6 +259,22 @@ ManagerMainWindow::ManagerMainWindow(
                     bMatches ? QStringLiteral("一致") : QStringLiteral("失败")
                 )
             );
+        }
+    );
+    connect(
+        &m_ctlAttackExperiment,
+        &ManagerAttackExperimentController::stateChanged,
+        this,
+        &ManagerMainWindow::refreshAttackControls
+    );
+    connect(
+        &m_ctlAttackExperiment,
+        &ManagerAttackExperimentController::message,
+        this,
+        [this](const QString& strMessage)
+        {
+            m_pStatusLabel->setText(strMessage);
+            refreshAttackControls();
         }
     );
 
@@ -526,6 +569,56 @@ QWidget* ManagerMainWindow::pCreateExperimentPage()
     pButtons->addStretch();
     pLayout->insertLayout(1, pButtons);
 
+    QGroupBox* pFaultGroup = new QGroupBox(
+        QStringLiteral("发送侧故障注入"),
+        pPage
+    );
+    QFormLayout* pFaultForm = new QFormLayout(pFaultGroup);
+    m_pFaultSenderCombo = new QComboBox(pFaultGroup);
+    m_pFaultTypeCombo = new QComboBox(pFaultGroup);
+    m_pFaultTypeCombo->addItems({
+        QStringLiteral("丢包"),
+        QStringLiteral("逻辑断链"),
+        QStringLiteral("固定延迟")
+    });
+    m_pFaultLossRateSpin = new QDoubleSpinBox(pFaultGroup);
+    m_pFaultLossRateSpin->setRange(0.01, 99.99);
+    m_pFaultLossRateSpin->setDecimals(2);
+    m_pFaultLossRateSpin->setValue(10.0);
+    m_pFaultLossRateSpin->setSuffix(QStringLiteral(" %"));
+    m_pFaultProtectedGroupSpin = new QSpinBox(pFaultGroup);
+    m_pFaultProtectedGroupSpin->setRange(1, 10000000);
+    m_pFaultProtectedGroupSpin->setValue(100);
+    m_pFaultProtectedGroupSpin->setToolTip(QStringLiteral(
+        "标签承载的组末位置不会被丢弃。原生/改进对比时应使用相同保护分组大小。"
+    ));
+    m_pFaultStartPacketSpin = new QSpinBox(pFaultGroup);
+    m_pFaultStartPacketSpin->setRange(1, 10000000);
+    m_pFaultDurationSpin = new QSpinBox(pFaultGroup);
+    m_pFaultDurationSpin->setRange(1, 60000);
+    m_pFaultDurationSpin->setValue(1000);
+    m_pFaultDelaySpin = new QSpinBox(pFaultGroup);
+    m_pFaultDelaySpin->setRange(1, 10000);
+    m_pFaultDelaySpin->setValue(100);
+    m_pFaultStateLabel = new QLabel(QStringLiteral("未配置"), pFaultGroup);
+    m_pFaultPrepareButton = new QPushButton(
+        QStringLiteral("下发故障注入计划"),
+        pFaultGroup
+    );
+    pFaultForm->addRow(QStringLiteral("目标Sender"), m_pFaultSenderCombo);
+    pFaultForm->addRow(QStringLiteral("类型"), m_pFaultTypeCombo);
+    pFaultForm->addRow(QStringLiteral("丢包率"), m_pFaultLossRateSpin);
+    pFaultForm->addRow(
+        QStringLiteral("标签保护分组"),
+        m_pFaultProtectedGroupSpin
+    );
+    pFaultForm->addRow(QStringLiteral("断链起始报文"), m_pFaultStartPacketSpin);
+    pFaultForm->addRow(QStringLiteral("断链持续ms"), m_pFaultDurationSpin);
+    pFaultForm->addRow(QStringLiteral("固定延迟ms"), m_pFaultDelaySpin);
+    pFaultForm->addRow(QStringLiteral("状态"), m_pFaultStateLabel);
+    pFaultForm->addRow(m_pFaultPrepareButton);
+    pLayout->insertWidget(2, pFaultGroup);
+
     connect(
         m_pStartButton,
         &QPushButton::clicked,
@@ -550,7 +643,32 @@ QWidget* ManagerMainWindow::pCreateExperimentPage()
         this,
         &ManagerMainWindow::stopRound
     );
+    connect(
+        m_pFaultPrepareButton,
+        &QPushButton::clicked,
+        this,
+        &ManagerMainWindow::prepareFaultPlan
+    );
+    connect(
+        m_pFaultTypeCombo,
+        &QComboBox::currentIndexChanged,
+        this,
+        [this](int)
+        {
+            refreshFaultControls();
+        }
+    );
+    connect(
+        m_pFaultProtectedGroupSpin,
+        &QSpinBox::valueChanged,
+        this,
+        [this](int)
+        {
+            refreshFaultControls();
+        }
+    );
 
+    refreshFaultControls();
     return pPage;
 }
 
@@ -560,8 +678,8 @@ QWidget* ManagerMainWindow::pCreateAttackPage()
     QVBoxLayout* pLayout = new QVBoxLayout(pPage);
     QLabel* pHintLabel = new QLabel(
         QStringLiteral(
-            "攻击测试端独立发现和连接，不进入正常Sender选择表。"
-            "攻击计划与执行在阶段10启用。"
+            "管理端只选择独立测试端和目标Sender并下发公开上下文；"
+            "具体计划在测试端配置，返回后由管理端安装临时Receiver来源映射。"
         ),
         pPage
     );
@@ -575,7 +693,7 @@ QWidget* ManagerMainWindow::pCreateAttackPage()
         QStringLiteral("IP地址"),
         QStringLiteral("TCP状态"),
         QStringLiteral("组播监听"),
-        QStringLiteral("攻击状态"),
+        QStringLiteral("测试状态"),
         QStringLiteral("最后心跳")
     });
     m_pAttackTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
@@ -583,21 +701,53 @@ QWidget* ManagerMainWindow::pCreateAttackPage()
     m_pAttackTable->setAlternatingRowColors(true);
     pLayout->addWidget(m_pAttackTable, 1);
 
+    QGroupBox* pPlanGroup = new QGroupBox(
+        QStringLiteral("认证鲁棒性测试编排"),
+        pPage
+    );
+    QFormLayout* pForm = new QFormLayout(pPlanGroup);
+    m_pAttackEndpointCombo = new QComboBox(pPlanGroup);
+    m_pAttackSenderCombo = new QComboBox(pPlanGroup);
+    m_pAttackStateLabel = new QLabel(QStringLiteral("未准备"), pPlanGroup);
+    m_pAttackPlanLabel = new QLabel(QStringLiteral("尚未收到计划"), pPlanGroup);
+    m_pAttackPlanLabel->setWordWrap(true);
+
+    pForm->addRow(QStringLiteral("独立测试端"), m_pAttackEndpointCombo);
+    pForm->addRow(QStringLiteral("目标Sender"), m_pAttackSenderCombo);
+    pForm->addRow(QStringLiteral("测试端返回计划"), m_pAttackPlanLabel);
+    pForm->addRow(QStringLiteral("状态"), m_pAttackStateLabel);
+    pLayout->addWidget(pPlanGroup);
+
     QHBoxLayout* pButtons = new QHBoxLayout();
-    pButtons->addWidget(pDisabledStageButton(
-        QStringLiteral("配置攻击计划"),
-        QStringLiteral("阶段10实现")
-    ));
-    pButtons->addWidget(pDisabledStageButton(
-        QStringLiteral("同步开始"),
-        QStringLiteral("阶段10实现")
-    ));
-    pButtons->addWidget(pDisabledStageButton(
-        QStringLiteral("停止攻击"),
-        QStringLiteral("阶段10实现")
-    ));
+    m_pAttackPrepareButton = new QPushButton(QStringLiteral("下发公开上下文"), pPage);
+    m_pAttackStopButton = new QPushButton(QStringLiteral("停止异常流量模拟"), pPage);
+    m_pAttackEmergencyButton = new QPushButton(QStringLiteral("紧急停止"), pPage);
+    m_pAttackPrepareButton->setObjectName(QStringLiteral("primaryButton"));
+    pButtons->addWidget(m_pAttackPrepareButton);
+    pButtons->addWidget(m_pAttackStopButton);
+    pButtons->addWidget(m_pAttackEmergencyButton);
     pButtons->addStretch();
     pLayout->addLayout(pButtons);
+
+    connect(
+        m_pAttackPrepareButton,
+        &QPushButton::clicked,
+        this,
+        &ManagerMainWindow::prepareAttackContext
+    );
+    connect(
+        m_pAttackStopButton,
+        &QPushButton::clicked,
+        this,
+        &ManagerMainWindow::stopAttackPlan
+    );
+    connect(
+        m_pAttackEmergencyButton,
+        &QPushButton::clicked,
+        this,
+        &ManagerMainWindow::emergencyStopAttackPlan
+    );
+    refreshAttackControls();
     return pPage;
 }
 
@@ -657,10 +807,19 @@ QWidget* ManagerMainWindow::pCreateStagePlaceholder(
 void ManagerMainWindow::refreshNodeTables()
 {
     const QVector<ManagerNodeSnapshot> vecSnapshots = m_ctlNetwork.vecNodeSnapshots();
+    const QString strCurrentAttackEndpoint =
+        m_pAttackEndpointCombo != nullptr
+            ? m_pAttackEndpointCombo->currentData().toString()
+            : QString();
 
     m_pNodeTable->blockSignals(true);
     m_pNodeTable->setRowCount(0);
     m_pAttackTable->setRowCount(0);
+    if (m_pAttackEndpointCombo != nullptr)
+    {
+        m_pAttackEndpointCombo->blockSignals(true);
+        m_pAttackEndpointCombo->clear();
+    }
 
     for (const ManagerNodeSnapshot& snpNode : vecSnapshots)
     {
@@ -700,6 +859,15 @@ void ManagerMainWindow::refreshNodeTables()
                 ))
             );
             m_pAttackTable->setItem(nRow, 5, pReadOnlyItem(strHeartbeat));
+            if (m_pAttackEndpointCombo != nullptr
+                && snpNode.stateConnection() == ManagerConnectionState::Connected)
+            {
+                m_pAttackEndpointCombo->addItem(
+                    snpNode.strNodeName() + QStringLiteral(" / ")
+                        + snpNode.strIpAddress(),
+                    snpNode.strEndpointKey()
+                );
+            }
             continue;
         }
 
@@ -751,6 +919,19 @@ void ManagerMainWindow::refreshNodeTables()
     }
 
     m_pNodeTable->blockSignals(false);
+    if (m_pAttackEndpointCombo != nullptr)
+    {
+        const int nIndex = m_pAttackEndpointCombo->findData(
+            strCurrentAttackEndpoint
+        );
+        if (nIndex >= 0)
+        {
+            m_pAttackEndpointCombo->setCurrentIndex(nIndex);
+        }
+        m_pAttackEndpointCombo->blockSignals(false);
+    }
+    refreshFaultControls();
+    refreshAttackControls();
 }
 
 void ManagerMainWindow::validateAuthenticationInputs()
@@ -951,6 +1132,9 @@ void ManagerMainWindow::refreshAuthenticationActions()
         m_bAuthenticationInputsValid
         && m_bPreparedConfigurationCurrent
         && m_ctlAuthentication.bConfigurationReady()
+        && m_ctlAuthentication.bFaultPlanReady()
+        && (!m_ctlAttackExperiment.bContextSent()
+            || m_ctlAttackExperiment.bReady())
         && !bRunning
     );
     m_pPauseButton->setEnabled(bRunning && !bPaused);
@@ -1143,14 +1327,39 @@ void ManagerMainWindow::prepareRound()
 void ManagerMainWindow::startRound()
 {
     QString strError;
-    if (!m_ctlAuthentication.bStartRound(strError))
+    const std::uint64_t u64StartTimestampMilliseconds =
+        static_cast<std::uint64_t>(QDateTime::currentMSecsSinceEpoch()) + 2000U;
+
+    const bool bHasRobustnessPlan = m_ctlAttackExperiment.bReady();
+    if (bHasRobustnessPlan
+        && !m_ctlAttackExperiment.bStartPrepared(
+            u64StartTimestampMilliseconds,
+            strError
+        ))
     {
         m_pStatusLabel->setText(strError);
         return;
     }
 
+    if (!m_ctlAuthentication.bStartRoundAt(
+            u64StartTimestampMilliseconds,
+            strError
+        ))
+    {
+        if (bHasRobustnessPlan)
+        {
+            QString strRollbackError;
+            static_cast<void>(m_ctlAttackExperiment.bStopPrepared(
+                false,
+                strRollbackError
+            ));
+        }
+        m_pStatusLabel->setText(strError);
+        return;
+    }
+
     m_pStatusLabel->setText(QStringLiteral(
-        "开始命令已下发，节点将在统一未来时间启动"
+        "开始命令已使用同一未来时间下发给所有已准备参与方"
     ));
 }
 
@@ -1185,6 +1394,15 @@ void ManagerMainWindow::resumeRound()
 void ManagerMainWindow::stopRound()
 {
     QString strError;
+    if (m_ctlAttackExperiment.bRunning()
+        || m_ctlAttackExperiment.bReady())
+    {
+        QString strTestStopError;
+        static_cast<void>(m_ctlAttackExperiment.bStopPrepared(
+            false,
+            strTestStopError
+        ));
+    }
     if (!m_ctlAuthentication.bStopRound(strError))
     {
         m_pStatusLabel->setText(strError);
@@ -1192,6 +1410,294 @@ void ManagerMainWindow::stopRound()
     }
 
     m_pStatusLabel->setText(QStringLiteral("停止命令已下发"));
+}
+
+void ManagerMainWindow::prepareFaultPlan()
+{
+    try
+    {
+        QString strError;
+        const int nSenderContextIndex =
+            m_pFaultSenderCombo->currentData().toInt();
+        const QVector<tesla::protocol::AttackRoundContextControlDetails>
+            vecContexts = m_ctlAuthentication.vecAttackRoundContexts();
+        if (nSenderContextIndex < 0
+            || nSenderContextIndex >= vecContexts.size())
+        {
+            m_pStatusLabel->setText(QStringLiteral("故障注入目标Sender无效"));
+            return;
+        }
+
+        const auto& detContext = vecContexts.at(nSenderContextIndex);
+        const std::uint32_t u32ProtectedGroupSize = static_cast<std::uint32_t>(
+            m_pFaultProtectedGroupSpin->value()
+        );
+        if (m_pFaultTypeCombo->currentIndex() != 2
+            && detContext.u32PacketsPerInterval() % u32ProtectedGroupSize != 0)
+        {
+            m_pStatusLabel->setText(QStringLiteral(
+                "标签保护分组必须整除每间隔发包数"
+            ));
+            return;
+        }
+
+        tesla::protocol::AuthenticationFaultDetails varFault =
+            tesla::protocol::FixedDelayFaultDetails(1);
+        if (m_pFaultTypeCombo->currentIndex() == 0)
+        {
+            std::uint64_t u64RandomSeed =
+                QRandomGenerator::global()->generate64();
+            if (u64RandomSeed == 0)
+            {
+                // 协议用零表示无效种子，极小概率取零时改用固定非零值。
+                u64RandomSeed = 1;
+            }
+            varFault = tesla::protocol::PacketLossFaultDetails(
+                m_pFaultLossRateSpin->value(),
+                u64RandomSeed,
+                u32ProtectedGroupSize
+            );
+        }
+        else if (m_pFaultTypeCombo->currentIndex() == 1)
+        {
+            varFault = tesla::protocol::LogicalDisconnectFaultDetails(
+                static_cast<std::uint32_t>(m_pFaultStartPacketSpin->value()),
+                static_cast<std::uint32_t>(m_pFaultDurationSpin->value()),
+                u32ProtectedGroupSize
+            );
+        }
+        else
+        {
+            varFault = tesla::protocol::FixedDelayFaultDetails(
+                static_cast<std::uint32_t>(m_pFaultDelaySpin->value())
+            );
+        }
+
+        if (!m_ctlAuthentication.bConfigureFaultPlan(
+                nSenderContextIndex,
+                std::move(varFault),
+                strError
+            ))
+        {
+            m_pStatusLabel->setText(strError);
+        }
+        refreshFaultControls();
+    }
+    catch (const std::exception& exError)
+    {
+        m_pStatusLabel->setText(QString::fromUtf8(exError.what()));
+        refreshFaultControls();
+    }
+}
+
+void ManagerMainWindow::prepareAttackContext()
+{
+    QString strError;
+    if (!m_ctlAttackExperiment.bPrepareContext(
+            m_pAttackEndpointCombo->currentData().toString(),
+            m_pAttackSenderCombo->currentData().toInt(),
+            strError
+        ))
+    {
+        m_pStatusLabel->setText(strError);
+        return;
+    }
+
+    m_pStatusLabel->setText(QStringLiteral(
+        "公开上下文已下发，请在独立测试端配置计划"
+    ));
+    refreshAttackControls();
+}
+
+void ManagerMainWindow::stopAttackPlan()
+{
+    QString strError;
+    if (!m_ctlAttackExperiment.bStopPrepared(false, strError))
+    {
+        m_pStatusLabel->setText(strError);
+        return;
+    }
+
+    m_pStatusLabel->setText(QStringLiteral("异常流量模拟停止命令已下发"));
+    refreshAttackControls();
+}
+
+void ManagerMainWindow::emergencyStopAttackPlan()
+{
+    QString strError;
+    if (!m_ctlAttackExperiment.bStopPrepared(true, strError))
+    {
+        m_pStatusLabel->setText(strError);
+        return;
+    }
+
+    m_pStatusLabel->setText(QStringLiteral("异常流量模拟紧急停止命令已下发"));
+    refreshAttackControls();
+}
+
+void ManagerMainWindow::refreshFaultControls()
+{
+    if (m_pFaultSenderCombo == nullptr || m_pFaultTypeCombo == nullptr)
+    {
+        return;
+    }
+
+    const int nCurrentSenderIndex = m_pFaultSenderCombo->currentData().toInt();
+    const QVector<tesla::protocol::AttackRoundContextControlDetails>
+        vecContexts = m_ctlAuthentication.vecAttackRoundContexts();
+    m_pFaultSenderCombo->blockSignals(true);
+    m_pFaultSenderCombo->clear();
+    for (int nIndex = 0; nIndex < vecContexts.size(); ++nIndex)
+    {
+        const auto& detContext = vecContexts.at(nIndex);
+        m_pFaultSenderCombo->addItem(
+            QString::fromStdString(detContext.strTargetSenderId())
+                + QStringLiteral(" / chain ")
+                + QString::number(detContext.u64ChainId()),
+            nIndex
+        );
+    }
+    const int nRestoredIndex = m_pFaultSenderCombo->findData(
+        nCurrentSenderIndex
+    );
+    if (nRestoredIndex >= 0)
+    {
+        m_pFaultSenderCombo->setCurrentIndex(nRestoredIndex);
+    }
+    m_pFaultSenderCombo->blockSignals(false);
+
+    const int nType = m_pFaultTypeCombo->currentIndex();
+    const int nSelectedContextIndex =
+        m_pFaultSenderCombo->currentData().toInt();
+    const bool bHasSelectedContext = nSelectedContextIndex >= 0
+        && nSelectedContextIndex < vecContexts.size();
+    bool bProtectedGroupValid = true;
+    if (bHasSelectedContext)
+    {
+        const auto& detContext = vecContexts.at(nSelectedContextIndex);
+        m_pFaultProtectedGroupSpin->blockSignals(true);
+        m_pFaultProtectedGroupSpin->setMaximum(
+            static_cast<int>(detContext.u32PacketsPerInterval())
+        );
+        if (detContext.modeAuthentication()
+            == tesla::protocol::UdpAuthenticationMode::Improved)
+        {
+            m_pFaultProtectedGroupSpin->setValue(
+                static_cast<int>(detContext.u32GroupSize())
+            );
+        }
+        m_pFaultProtectedGroupSpin->blockSignals(false);
+        m_pFaultStartPacketSpin->setMaximum(
+            static_cast<int>(detContext.u32DataPacketCount())
+        );
+        bProtectedGroupValid = detContext.u32PacketsPerInterval()
+            % static_cast<std::uint32_t>(
+                m_pFaultProtectedGroupSpin->value()
+            ) == 0;
+    }
+
+    const bool bRunning = m_ctlAuthentication.bRoundRunning();
+    const bool bCanConfigureBase = m_ctlAuthentication.bConfigurationReady()
+        && !bRunning
+        && !m_ctlAuthentication.bFaultPlanPending()
+        && (!m_ctlAuthentication.bFaultConfigured()
+            || !m_ctlAuthentication.bFaultPlanReady())
+        && !m_ctlAttackExperiment.bContextSent()
+        && m_pFaultSenderCombo->count() > 0;
+    const bool bRequiresProtectedGroup = nType == 0 || nType == 1;
+    const bool bCanConfigure = bCanConfigureBase
+        && (!bRequiresProtectedGroup || bProtectedGroupValid);
+    m_pFaultLossRateSpin->setEnabled(nType == 0 && bCanConfigure);
+    m_pFaultProtectedGroupSpin->setEnabled(
+        bRequiresProtectedGroup
+            && bCanConfigureBase
+            && bHasSelectedContext
+            && vecContexts.at(nSelectedContextIndex).modeAuthentication()
+                == tesla::protocol::UdpAuthenticationMode::Native
+    );
+    m_pFaultStartPacketSpin->setEnabled(nType == 1 && bCanConfigure);
+    m_pFaultDurationSpin->setEnabled(nType == 1 && bCanConfigure);
+    m_pFaultDelaySpin->setEnabled(nType == 2 && bCanConfigure);
+    m_pFaultTypeCombo->setEnabled(bCanConfigure);
+    m_pFaultSenderCombo->setEnabled(bCanConfigure);
+    m_pFaultPrepareButton->setEnabled(bCanConfigure);
+    m_pFaultProtectedGroupSpin->setStyleSheet(
+        bRequiresProtectedGroup && !bProtectedGroupValid
+            ? QStringLiteral("border: 2px solid #dc2626; background: #fff7f7;")
+            : QString()
+    );
+
+    if (m_ctlAuthentication.bFaultPlanPending())
+    {
+        m_pFaultStateLabel->setText(QStringLiteral("等待目标Sender确认"));
+    }
+    else if (m_ctlAuthentication.bFaultConfigured()
+        && m_ctlAuthentication.bFaultPlanReady())
+    {
+        m_pFaultStateLabel->setText(QStringLiteral("已确认；本轮停止后自动清除"));
+    }
+    else
+    {
+        m_pFaultStateLabel->setText(QStringLiteral("未配置"));
+    }
+}
+
+void ManagerMainWindow::refreshAttackControls()
+{
+    if (m_pAttackEndpointCombo == nullptr
+        || m_pAttackSenderCombo == nullptr)
+    {
+        return;
+    }
+
+    const int nCurrentSenderIndex =
+        m_pAttackSenderCombo->currentData().toInt();
+    const QVector<tesla::protocol::AttackRoundContextControlDetails>
+        vecContexts = m_ctlAuthentication.vecAttackRoundContexts();
+    m_pAttackSenderCombo->blockSignals(true);
+    m_pAttackSenderCombo->clear();
+    for (int nIndex = 0; nIndex < vecContexts.size(); ++nIndex)
+    {
+        const tesla::protocol::AttackRoundContextControlDetails& detContext =
+            vecContexts.at(nIndex);
+        m_pAttackSenderCombo->addItem(
+            QString::fromStdString(detContext.strTargetSenderId())
+                + QStringLiteral(" / chain ")
+                + QString::number(detContext.u64ChainId()),
+            nIndex
+        );
+    }
+    const int nRestoredIndex = m_pAttackSenderCombo->findData(
+        nCurrentSenderIndex
+    );
+    if (nRestoredIndex >= 0)
+    {
+        m_pAttackSenderCombo->setCurrentIndex(nRestoredIndex);
+    }
+    m_pAttackSenderCombo->blockSignals(false);
+
+    const bool bHasEndpoint = m_pAttackEndpointCombo->count() > 0;
+    const bool bHasContext = m_pAttackSenderCombo->count() > 0;
+    const bool bReady = m_ctlAttackExperiment.bReady();
+    const bool bRunning = m_ctlAttackExperiment.bRunning();
+    m_pAttackStateLabel->setText(m_ctlAttackExperiment.strStateText());
+    m_pAttackPlanLabel->setText(m_ctlAttackExperiment.strPlanSummary());
+
+    m_pAttackPrepareButton->setEnabled(
+        bHasEndpoint
+            && bHasContext
+            && !bRunning
+            && !m_ctlAttackExperiment.bContextSent()
+            && !m_ctlAuthentication.bFaultConfigured()
+    );
+    m_pAttackEndpointCombo->setEnabled(!m_ctlAttackExperiment.bContextSent());
+    m_pAttackSenderCombo->setEnabled(!m_ctlAttackExperiment.bContextSent());
+    m_pAttackStopButton->setEnabled(
+        m_ctlAttackExperiment.bContextSent() || bReady || bRunning
+    );
+    m_pAttackEmergencyButton->setEnabled(bReady || bRunning);
+
+    refreshAuthenticationActions();
 }
 
 void ManagerMainWindow::applyStyle()

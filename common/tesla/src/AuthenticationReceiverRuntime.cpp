@@ -136,6 +136,9 @@ public:
         std::uint64_t                         u64ObservationEventId = 0;
         std::string                           strCandidateHash;
         std::uint32_t                         u32DuplicateCount = 0;
+        std::string                           strActualSourceIp;
+        protocol::PacketSourceType            typeSource =
+            protocol::PacketSourceType::NormalSender;
     };
 
     struct AdditionalCandidateRecord final
@@ -146,6 +149,10 @@ public:
         std::uint64_t           u64ObservationEventId = 0;
         std::string             strCandidateHash;
         std::uint32_t           u32DuplicateCount = 1;
+        PacketStatus            statusPacket = PacketStatus::Pending;
+        std::string             strActualSourceIp;
+        protocol::PacketSourceType typeSource =
+            protocol::PacketSourceType::AttackInjection;
     };
 
     struct TimelineSegment final
@@ -188,6 +195,19 @@ public:
         ContextKey            keyContext;
         protocol::ByteBuffer  vecDatagram;
         std::uint64_t         u64ReceiveTimestampMilliseconds = 0;
+        std::string           strActualSourceIp;
+        protocol::PacketSourceType typeSource =
+            protocol::PacketSourceType::NormalSender;
+    };
+
+    struct AttackSourceMapping final
+    {
+        std::string   strRoundId;
+        std::string   strTargetSenderId;
+        std::string   strTargetSenderIp;
+        std::string   strAttackSourceIp;
+        std::uint64_t u64ChainId = 0;
+        std::uint64_t u64ExpiresAtMilliseconds = 0;
     };
 
     Impl(
@@ -471,11 +491,77 @@ public:
             m_bRunning = false;
             m_bPaused = false;
             m_deqDatagrams.clear();
+            m_mapAttackSourceMappings.clear();
             vecMetrics.swap(m_vecPendingMetrics);
         }
 
-        emitResults(vecResults);
         emitMetrics(vecMetrics);
+        // 轮次汇总归档依赖最终能耗摘要，因此指标必须先于结果回调可见。
+        emitResults(vecResults);
+    }
+
+    void applyAttackSourceMapping(
+        const protocol::AttackSourceMappingControlDetails& detMapping
+    )
+    {
+        std::lock_guard<std::mutex> lckState(m_mtxState);
+        const ContextKey keyTarget(
+            detMapping.strTargetSenderIp(),
+            detMapping.u64ChainId()
+        );
+        const auto itTarget = m_mapStates.find(keyTarget);
+        if (itTarget == m_mapStates.end()
+            || itTarget->second->ctxContext.strSenderId()
+                != detMapping.strTargetSenderId())
+        {
+            throw std::invalid_argument(
+                "Attack source mapping target does not match a receiver context"
+            );
+        }
+
+        const ContextKey keyAttack(
+            detMapping.strAttackSourceIp(),
+            detMapping.u64ChainId()
+        );
+        if (detMapping.actAction()
+            == protocol::AttackSourceMappingAction::Clear)
+        {
+            m_mapAttackSourceMappings.erase(keyAttack);
+            return;
+        }
+
+        if (m_bRunning
+            || detMapping.u64ExpiresAtMilliseconds() <= u64NowMilliseconds())
+        {
+            throw std::logic_error(
+                "Attack source mapping must be installed before start with a future expiry"
+            );
+        }
+
+        const AttackSourceMapping mapMapping{
+            detMapping.strRoundId(),
+            detMapping.strTargetSenderId(),
+            detMapping.strTargetSenderIp(),
+            detMapping.strAttackSourceIp(),
+            detMapping.u64ChainId(),
+            detMapping.u64ExpiresAtMilliseconds()
+        };
+        const auto prInserted = m_mapAttackSourceMappings.emplace(
+            keyAttack,
+            mapMapping
+        );
+        if (!prInserted.second)
+        {
+            throw std::logic_error(
+                "Only one attack source mapping may target a sender round"
+            );
+        }
+    }
+
+    void clearAttackSourceMappings() noexcept
+    {
+        std::lock_guard<std::mutex> lckState(m_mtxState);
+        m_mapAttackSourceMappings.clear();
     }
 
     bool bEnqueueDatagram(
@@ -514,13 +600,31 @@ public:
 
         const protocol::UdpAuthenticationPacketHeader& hdrPacket =
             std::get<protocol::UdpAuthenticationPacketHeader>(resHeader);
-        const ContextKey keyContext(
+        ContextKey keyContext(
             strSourceIpAddress,
             hdrPacket.u64ChainId()
         );
 
         std::lock_guard<std::mutex> lckState(m_mtxState);
-        const auto itState = m_mapStates.find(keyContext);
+        auto itState = m_mapStates.find(keyContext);
+        protocol::PacketSourceType typeSource =
+            protocol::PacketSourceType::NormalSender;
+        if (itState == m_mapStates.end())
+        {
+            const auto itMapping = m_mapAttackSourceMappings.find(keyContext);
+            if (itMapping != m_mapAttackSourceMappings.end()
+                && itMapping->second.strRoundId == m_strRoundId
+                && itMapping->second.u64ExpiresAtMilliseconds
+                    >= u64ReceiveTimestampMilliseconds)
+            {
+                keyContext = ContextKey(
+                    itMapping->second.strTargetSenderIp,
+                    itMapping->second.u64ChainId
+                );
+                itState = m_mapStates.find(keyContext);
+                typeSource = protocol::PacketSourceType::AttackInjection;
+            }
+        }
         if (!m_bRunning
             || itState == m_mapStates.end()
             || !itState->second->bActive)
@@ -561,7 +665,9 @@ public:
         m_deqDatagrams.push_back(QueuedDatagram{
             keyContext,
             vecDatagram,
-            u64ReceiveTimestampMilliseconds
+            u64ReceiveTimestampMilliseconds,
+            strSourceIpAddress,
+            typeSource
         });
         ++m_u64LegitimateWindowCount;
         m_cndState.notify_one();
@@ -673,7 +779,10 @@ private:
         std::uint64_t u64EventId,
         std::uint32_t u32DuplicateCount,
         protocol::PacketAuthenticationStatus statusAuthentication,
-        std::string strReason
+        std::string strReason,
+        std::string strActualSourceIp = {},
+        protocol::PacketSourceType typeSource =
+            protocol::PacketSourceType::NormalSender
     )
     {
         if (!m_fnObservationHandler)
@@ -700,6 +809,10 @@ private:
 
         const AuthenticationRoundParameters& prmRound =
             staReceiver.ctxContext.prmRoundParameters();
+        if (strActualSourceIp.empty())
+        {
+            strActualSourceIp = staReceiver.ctxContext.strSenderIpAddress();
+        }
         m_vecPendingObservations.emplace_back(
             protocol::PacketObservationControlDetails(
                 u64EventId,
@@ -707,10 +820,10 @@ private:
                 staReceiver.strRoundId,
                 staReceiver.ctxContext.strSenderId(),
                 staReceiver.ctxContext.strSenderIpAddress(),
-                staReceiver.ctxContext.strSenderIpAddress(),
-                staReceiver.ctxContext.strSenderIpAddress(),
+                strActualSourceIp,
+                strActualSourceIp,
                 protocol::PacketObservationDirection::Rx,
-                protocol::PacketSourceType::NormalSender,
+                typeSource,
                 staReceiver.ctxContext.u64ChainId(),
                 u32IntervalIndex,
                 u32PacketIndex,
@@ -747,7 +860,8 @@ private:
         std::string strCalculatedTagDigest,
         std::vector<std::uint32_t> vecLocatedPacketIndexes,
         std::uint32_t u32DuplicateCount,
-        protocol::ObservationSeverity sevSeverity
+        protocol::ObservationSeverity sevSeverity,
+        std::string strActualSourceIp = {}
     )
     {
         if (staReceiver.optMetricCollector.has_value())
@@ -761,6 +875,11 @@ private:
             return;
         }
 
+        if (strActualSourceIp.empty())
+        {
+            strActualSourceIp = staReceiver.ctxContext.strSenderIpAddress();
+        }
+
         m_vecPendingObservations.emplace_back(
             protocol::PacketFailureControlDetails(
                 nextObservationEventId(),
@@ -771,7 +890,7 @@ private:
                 staReceiver.strRoundId,
                 staReceiver.ctxContext.strSenderId(),
                 staReceiver.ctxContext.strSenderIpAddress(),
-                staReceiver.ctxContext.strSenderIpAddress(),
+                strActualSourceIp,
                 staReceiver.ctxContext.u64ChainId(),
                 u32IntervalIndex,
                 u32PacketIndex,
@@ -961,9 +1080,10 @@ private:
                 vecMetrics.swap(m_vecPendingMetrics);
             }
 
-            emitResults(vecResults);
             emitObservations(vecObservations);
             emitMetrics(vecMetrics);
+            // 保证节点适配层在收到最终结果时已经能够组装完整逐轮指标。
+            emitResults(vecResults);
         }
     }
 
@@ -1007,7 +1127,8 @@ private:
                 "",
                 {},
                 1,
-                protocol::ObservationSeverity::Error
+                protocol::ObservationSeverity::Error,
+                queDatagram.strActualSourceIp
             );
             return;
         }
@@ -1039,7 +1160,9 @@ private:
                     : protocol::PacketAuthenticationStatus::Failed,
                 bAccepted
                     ? "Disclosed key accepted"
-                    : "Disclosed key rejected"
+                    : "Disclosed key rejected",
+                queDatagram.strActualSourceIp,
+                queDatagram.typeSource
             );
             if (!bAccepted)
             {
@@ -1082,7 +1205,9 @@ private:
                 u64PacketEventId,
                 1,
                 protocol::PacketAuthenticationStatus::Failed,
-                "Packet arrived after its safe authentication window"
+                "Packet arrived after its safe authentication window",
+                queDatagram.strActualSourceIp,
+                queDatagram.typeSource
             );
             queueFailureLocked(
                 staReceiver,
@@ -1099,7 +1224,8 @@ private:
                 "",
                 {},
                 1,
-                protocol::ObservationSeverity::Error
+                protocol::ObservationSeverity::Error,
+                queDatagram.strActualSourceIp
             );
             return;
         }
@@ -1123,7 +1249,9 @@ private:
                     recPacket.u64ObservationEventId,
                     recPacket.u32DuplicateCount,
                     statusMap(recPacket.statusPacket),
-                    "Identical datagram received again"
+                    "Identical datagram received again",
+                    recPacket.strActualSourceIp,
+                    recPacket.typeSource
                 );
                 queueFailureLocked(
                     staReceiver,
@@ -1137,8 +1265,9 @@ private:
                     "",
                     "",
                     {},
-                    recPacket.u32DuplicateCount,
-                    protocol::ObservationSeverity::Warning
+                recPacket.u32DuplicateCount,
+                    protocol::ObservationSeverity::Warning,
+                    recPacket.strActualSourceIp
                 );
                 return;
             }
@@ -1164,7 +1293,9 @@ private:
                     itCandidate->u64ObservationEventId,
                     itCandidate->u32DuplicateCount,
                     protocol::PacketAuthenticationStatus::Failed,
-                    "Conflicting candidate duplicate received"
+                    "Conflicting candidate duplicate received",
+                    itCandidate->strActualSourceIp,
+                    itCandidate->typeSource
                 );
                 queueFailureLocked(
                     staReceiver,
@@ -1179,7 +1310,8 @@ private:
                     "",
                     {},
                     itCandidate->u32DuplicateCount,
-                    protocol::ObservationSeverity::Warning
+                    protocol::ObservationSeverity::Warning,
+                    itCandidate->strActualSourceIp
                 );
                 return;
             }
@@ -1212,7 +1344,10 @@ private:
                 queDatagram.u64ReceiveTimestampMilliseconds,
                 u64CandidateEventId,
                 strCandidateHash,
-                1
+                1,
+                PacketStatus::Pending,
+                queDatagram.strActualSourceIp,
+                queDatagram.typeSource
             });
             queuePacketObservationLocked(
                 staReceiver,
@@ -1221,8 +1356,10 @@ private:
                 queDatagram.u64ReceiveTimestampMilliseconds,
                 u64CandidateEventId,
                 1,
-                protocol::PacketAuthenticationStatus::Failed,
-                "Conflicting candidate retained without replacing the baseline"
+                protocol::PacketAuthenticationStatus::Pending,
+                "Conflicting candidate retained without replacing the baseline",
+                queDatagram.strActualSourceIp,
+                queDatagram.typeSource
             );
             queueFailureLocked(
                 staReceiver,
@@ -1242,6 +1379,85 @@ private:
             return;
         }
 
+        if (queDatagram.typeSource == protocol::PacketSourceType::AttackInjection)
+        {
+            // 攻击副本可能比正常报文更早到达，但不能据此占用正常Sender基线槽位。
+            std::vector<AdditionalCandidateRecord>& vecCandidates =
+                staReceiver.mapAdditionalCandidates[udpData.u32PacketIndex()];
+            const auto itExisting = std::find_if(
+                vecCandidates.begin(),
+                vecCandidates.end(),
+                [&strCandidateHash](const AdditionalCandidateRecord& recCandidate)
+                {
+                    return recCandidate.strCandidateHash == strCandidateHash;
+                }
+            );
+            if (itExisting != vecCandidates.end())
+            {
+                ++itExisting->u32DuplicateCount;
+                queuePacketObservationLocked(
+                    staReceiver,
+                    protocol::UdpAuthenticationPacket(itExisting->udpPacket),
+                    itExisting->vecRawDatagram,
+                    itExisting->u64ReceiveTimestampMilliseconds,
+                    itExisting->u64ObservationEventId,
+                    itExisting->u32DuplicateCount,
+                    statusMap(itExisting->statusPacket),
+                    "Early attack candidate duplicate received",
+                    itExisting->strActualSourceIp,
+                    itExisting->typeSource
+                );
+                return;
+            }
+
+            if (vecCandidates.size() + 1U
+                >= MAX_CANDIDATE_VERSIONS_PER_PACKET)
+            {
+                queueFailureLocked(
+                    staReceiver,
+                    protocol::AuthenticationFailureType::TamperedVariant,
+                    0,
+                    udpData.u32IntervalIndex(),
+                    udpData.u32PacketIndex(),
+                    std::nullopt,
+                    strCandidateHash,
+                    "Attack candidate arrived before baseline and hit the version limit",
+                    "",
+                    "",
+                    {},
+                    1,
+                    protocol::ObservationSeverity::Error
+                );
+                return;
+            }
+
+            const std::uint64_t u64CandidateEventId = nextObservationEventId();
+            vecCandidates.push_back(AdditionalCandidateRecord{
+                udpData,
+                queDatagram.vecDatagram,
+                queDatagram.u64ReceiveTimestampMilliseconds,
+                u64CandidateEventId,
+                strCandidateHash,
+                1,
+                PacketStatus::Pending,
+                queDatagram.strActualSourceIp,
+                queDatagram.typeSource
+            });
+            queuePacketObservationLocked(
+                staReceiver,
+                udpPacket,
+                queDatagram.vecDatagram,
+                queDatagram.u64ReceiveTimestampMilliseconds,
+                u64CandidateEventId,
+                1,
+                protocol::PacketAuthenticationStatus::Pending,
+                "Attack candidate retained while waiting for normal baseline",
+                queDatagram.strActualSourceIp,
+                queDatagram.typeSource
+            );
+            return;
+        }
+
         recPacket.optPacket = udpData;
         recPacket.statusPacket = PacketStatus::Pending;
         recPacket.vecRawDatagram = queDatagram.vecDatagram;
@@ -1250,6 +1466,8 @@ private:
         recPacket.u64ObservationEventId = nextObservationEventId();
         recPacket.strCandidateHash = strCandidateHash;
         recPacket.u32DuplicateCount = 1;
+        recPacket.strActualSourceIp = queDatagram.strActualSourceIp;
+        recPacket.typeSource = queDatagram.typeSource;
         ++staReceiver.u32ReceivedPacketCount;
         recordReceivedDataFieldsLocked(staReceiver, udpData);
         queuePacketObservationLocked(
@@ -1260,7 +1478,9 @@ private:
             recPacket.u64ObservationEventId,
             recPacket.u32DuplicateCount,
             protocol::PacketAuthenticationStatus::Pending,
-            "Waiting for disclosed key"
+            "Waiting for disclosed key",
+            recPacket.strActualSourceIp,
+            recPacket.typeSource
         );
 
         if (udpData.optDisclosedKey().has_value())
@@ -1548,6 +1768,79 @@ private:
         );
     }
 
+    AuthenticationGroupInput grpCreateAttackCandidate(
+        const ReceiverState& staReceiver,
+        std::uint32_t u32IntervalIndex,
+        std::uint32_t u32GroupIndex,
+        std::uint32_t u32FirstPacketIndex,
+        std::uint32_t u32LastPacketIndex,
+        std::vector<std::uint32_t>& vecReplacedPacketIndexes
+    ) const
+    {
+        std::vector<AuthenticationGroupInput::PacketSlot> vecSlots;
+        vecSlots.reserve(u32LastPacketIndex - u32FirstPacketIndex + 1U);
+
+        for (std::uint32_t u32PacketIndex = u32FirstPacketIndex;
+             u32PacketIndex <= u32LastPacketIndex;
+             ++u32PacketIndex)
+        {
+            const PacketRecord& recBaseline =
+                staReceiver.vecPacketRecords[u32PacketIndex];
+            const auto itCandidates =
+                staReceiver.mapAdditionalCandidates.find(u32PacketIndex);
+            const AdditionalCandidateRecord* pAttackCandidate = nullptr;
+            if (itCandidates != staReceiver.mapAdditionalCandidates.end())
+            {
+                const auto itAttack = std::find_if(
+                    itCandidates->second.begin(),
+                    itCandidates->second.end(),
+                    [](const AdditionalCandidateRecord& recCandidate)
+                    {
+                        return recCandidate.typeSource
+                            == protocol::PacketSourceType::AttackInjection;
+                    }
+                );
+                if (itAttack != itCandidates->second.end())
+                {
+                    pAttackCandidate = &(*itAttack);
+                }
+            }
+
+            if (pAttackCandidate != nullptr)
+            {
+                vecSlots.emplace_back(
+                    UdpAuthenticationInputMapper::pktMapDataPacket(
+                        staReceiver.ctxContext.strSenderId(),
+                        pAttackCandidate->udpPacket
+                    )
+                );
+                vecReplacedPacketIndexes.push_back(u32PacketIndex);
+            }
+            else if (recBaseline.optPacket.has_value())
+            {
+                vecSlots.emplace_back(
+                    UdpAuthenticationInputMapper::pktMapDataPacket(
+                        staReceiver.ctxContext.strSenderId(),
+                        recBaseline.optPacket.value()
+                    )
+                );
+            }
+            else
+            {
+                vecSlots.push_back(std::nullopt);
+            }
+        }
+
+        return AuthenticationGroupInput(
+            staReceiver.ctxContext.strSenderId(),
+            staReceiver.ctxContext.u64ChainId(),
+            u32IntervalIndex,
+            u32GroupIndex,
+            u32FirstPacketIndex,
+            std::move(vecSlots)
+        );
+    }
+
     void queueVerificationMetricLocked(
         ReceiverState& staReceiver,
         std::uint32_t u32PacketCount,
@@ -1690,7 +1983,9 @@ private:
                 statusMap(recPacket.statusPacket),
                 recPacket.statusPacket == PacketStatus::Passed
                     ? "Native packet MAC passed"
-                    : "Native packet MAC failed"
+                    : "Native packet MAC failed",
+                recPacket.strActualSourceIp,
+                recPacket.typeSource
             );
 
             if (recPacket.statusPacket == PacketStatus::Failed)
@@ -1726,8 +2021,97 @@ private:
                     strHex(digCalculated),
                     {},
                     recPacket.u32DuplicateCount,
-                    protocol::ObservationSeverity::Error
+                    protocol::ObservationSeverity::Error,
+                    recPacket.strActualSourceIp
                 );
+            }
+        }
+
+        // 每个不同攻击候选只进行一次真实MAC验证；相同副本只累计重复次数。
+        for (std::uint32_t u32PacketIndex = u32FirstPacketIndex;
+             u32PacketIndex <= u32LastPacketIndex;
+             ++u32PacketIndex)
+        {
+            const auto itCandidates =
+                staReceiver.mapAdditionalCandidates.find(u32PacketIndex);
+            if (itCandidates == staReceiver.mapAdditionalCandidates.end())
+            {
+                continue;
+            }
+
+            const PacketRecord& recBaseline =
+                staReceiver.vecPacketRecords[u32PacketIndex];
+            for (AdditionalCandidateRecord& recCandidate : itCandidates->second)
+            {
+                const auto* pNative = std::get_if<
+                    protocol::NativeUdpAuthenticationDetails
+                >(&recCandidate.udpPacket.varAuthenticationDetails());
+                const AuthenticationPacketInput pktInput =
+                    UdpAuthenticationInputMapper::pktMapDataPacket(
+                        staReceiver.ctxContext.strSenderId(),
+                        recCandidate.udpPacket
+                    );
+                const crypto::Digest digCalculated =
+                    TeslaMac::digComputePacketMac(
+                        crpProvider,
+                        digDataKey,
+                        pktInput
+                    );
+                const bool bPassed = pNative != nullptr
+                    && crypto::CryptoUtilities::bDigestEquals(
+                        digMapBlock(pNative->arrPacketMac()),
+                        digCalculated
+                    );
+                recCandidate.statusPacket = bPassed
+                    ? PacketStatus::Passed
+                    : PacketStatus::Failed;
+                const bool bAttackDetected =
+                    recBaseline.statusPacket == PacketStatus::Passed
+                    && !bPassed;
+
+                queuePacketObservationLocked(
+                    staReceiver,
+                    protocol::UdpAuthenticationPacket(recCandidate.udpPacket),
+                    recCandidate.vecRawDatagram,
+                    recCandidate.u64ReceiveTimestampMilliseconds,
+                    recCandidate.u64ObservationEventId,
+                    recCandidate.u32DuplicateCount,
+                    statusMap(recCandidate.statusPacket),
+                    bAttackDetected
+                        ? "TAMPERED_VARIANT: baseline passed and conflicting MAC failed"
+                        : (bPassed
+                            ? "Conflicting candidate MAC passed"
+                            : "Conflicting candidate MAC failed"),
+                    recCandidate.strActualSourceIp,
+                    recCandidate.typeSource
+                );
+
+                if (!bPassed)
+                {
+                    queueFailureLocked(
+                        staReceiver,
+                        recCandidate.typeSource
+                                == protocol::PacketSourceType::AttackInjection
+                            ? protocol::AuthenticationFailureType::TamperedVariant
+                            : protocol::AuthenticationFailureType::MacFailed,
+                        recCandidate.u64ObservationEventId,
+                        u32IntervalIndex,
+                        u32PacketIndex,
+                        std::nullopt,
+                        recCandidate.strCandidateHash,
+                        bAttackDetected
+                            ? "ATTACK_DETECTED: legal baseline passed and attack candidate failed"
+                            : "Conflicting candidate failed native MAC verification",
+                        pNative == nullptr
+                            ? ""
+                            : strHex(pNative->arrPacketMac()),
+                        strHex(digCalculated),
+                        {},
+                        recCandidate.u32DuplicateCount,
+                        protocol::ObservationSeverity::Error,
+                        recCandidate.strActualSourceIp
+                    );
+                }
             }
         }
     }
@@ -1812,7 +2196,7 @@ private:
             const TeslaVerificationResult vfyResult = stgStrategy.vfyVerify(
                 grpInput,
                 ImprovedAuthenticationDetails(
-                    std::move(vecTau),
+                    vecTau,
                     optFastGroupTag
                 ),
                 digDataKey,
@@ -2011,7 +2395,9 @@ private:
                     statusMap(recPacket.statusPacket),
                     recPacket.statusPacket == PacketStatus::Passed
                         ? "Improved group authentication passed"
-                        : "Improved group authentication rejected this packet"
+                        : "Improved group authentication rejected this packet",
+                    recPacket.strActualSourceIp,
+                    recPacket.typeSource
                 );
             }
 
@@ -2070,6 +2456,220 @@ private:
                     1,
                     protocol::ObservationSeverity::Warning
                 );
+            }
+
+            std::vector<std::uint32_t> vecReplacedPacketIndexes;
+            const AuthenticationGroupInput grpAttack = grpCreateAttackCandidate(
+                staReceiver,
+                u32IntervalIndex,
+                u32GroupIndex,
+                u32GroupFirstPacket,
+                u32GroupLastPacket,
+                vecReplacedPacketIndexes
+            );
+            if (!vecReplacedPacketIndexes.empty())
+            {
+                if (detResult.pathVerification()
+                    != ImprovedVerificationPath::FastGroupPass)
+                {
+                    for (std::uint32_t u32PacketIndex
+                        : vecReplacedPacketIndexes)
+                    {
+                        const auto& vecCandidates = staReceiver
+                            .mapAdditionalCandidates[u32PacketIndex];
+                        const auto itAttack = std::find_if(
+                            vecCandidates.begin(),
+                            vecCandidates.end(),
+                            [](const AdditionalCandidateRecord& recCandidate)
+                            {
+                                return recCandidate.typeSource
+                                    == protocol::PacketSourceType::AttackInjection;
+                            }
+                        );
+                        if (itAttack != vecCandidates.end())
+                        {
+                            queueFailureLocked(
+                                staReceiver,
+                                protocol::AuthenticationFailureType::
+                                    UnverifiableMissingBaseline,
+                                itAttack->u64ObservationEventId,
+                                u32IntervalIndex,
+                                u32PacketIndex,
+                                u32GroupIndex,
+                                itAttack->strCandidateHash,
+                                "Attack candidate cannot be judged because the normal group did not pass FastGroupTag",
+                                "",
+                                "",
+                                {},
+                                itAttack->u32DuplicateCount,
+                                protocol::ObservationSeverity::Error,
+                                itAttack->strActualSourceIp
+                            );
+                        }
+                    }
+                }
+                else
+                {
+                    std::optional<metrics::PerformanceMeasurement>
+                        optAttackMeasurement;
+                    VerificationMeasurementHandler fnAttackMeasurement;
+                    if (staReceiver.optMetricCollector.has_value())
+                    {
+                        fnAttackMeasurement = [&optAttackMeasurement](
+                            std::size_t,
+                            const metrics::PerformanceMeasurement& mstPerformance
+                        )
+                        {
+                            optAttackMeasurement = mstPerformance;
+                        };
+                    }
+
+                    const TeslaVerificationResult vfyAttack =
+                        stgStrategy.vfyVerify(
+                            grpAttack,
+                            ImprovedAuthenticationDetails(
+                                vecTau,
+                                optFastGroupTag
+                            ),
+                            digDataKey,
+                            m_ptrPerformanceSampler.get(),
+                            std::move(fnAttackMeasurement)
+                        );
+                    const ImprovedVerificationDetails& detAttack = std::get<
+                        ImprovedVerificationDetails
+                    >(vfyAttack.varDetails());
+                    if (optAttackMeasurement.has_value())
+                    {
+                        queueVerificationMetricLocked(
+                            staReceiver,
+                            u32GroupLastPacket - u32GroupFirstPacket + 1U,
+                            optAttackMeasurement.value(),
+                            metrics::ImprovedVerificationMetricDetails(
+                                u32GroupIndex,
+                                u32GroupFirstPacket,
+                                u32GroupLastPacket,
+                                metrics::VerificationMetricPath::KsRsFallback
+                            )
+                        );
+                    }
+
+                    std::vector<std::uint32_t> vecAttackLocatedIndexes;
+                    for (std::size_t nPosition
+                        : detAttack.vecRejectedPositions())
+                    {
+                        vecAttackLocatedIndexes.push_back(
+                            u32GroupFirstPacket
+                                + static_cast<std::uint32_t>(nPosition)
+                        );
+                    }
+
+                    std::vector<protocol::MatrixLocationStepControlDetails>
+                        vecAttackSteps;
+                    std::uint32_t u32StepIndex = 1;
+                    for (const KsRsLocationStep& detLocation
+                        : detAttack.vecLocationSteps())
+                    {
+                        std::vector<std::uint32_t> vecNewGood;
+                        std::vector<std::uint32_t> vecRemaining;
+                        for (std::size_t nPosition
+                            : detLocation.vecNewGoodPositions())
+                        {
+                            vecNewGood.push_back(
+                                u32GroupFirstPacket
+                                    + static_cast<std::uint32_t>(nPosition)
+                            );
+                        }
+                        for (std::size_t nPosition
+                            : detLocation.vecRemainingCandidatePositions())
+                        {
+                            vecRemaining.push_back(
+                                u32GroupFirstPacket
+                                    + static_cast<std::uint32_t>(nPosition)
+                            );
+                        }
+                        vecAttackSteps.emplace_back(
+                            u32StepIndex++,
+                            "Attack candidate KS+RS row scan",
+                            std::move(vecNewGood),
+                            std::move(vecRemaining)
+                        );
+                    }
+
+                    m_vecPendingObservations.emplace_back(
+                        protocol::ImprovedGroupObservationControlDetails(
+                            nextObservationEventId(),
+                            u64NowMilliseconds(),
+                            staReceiver.strRoundId,
+                            staReceiver.ctxContext.strSenderId(),
+                            staReceiver.ctxContext.u64ChainId(),
+                            u32GroupIndex,
+                            u32GroupFirstPacket,
+                            u32GroupLastPacket,
+                            prmImproved.u32DetectionThreshold(),
+                            protocol::GroupVerificationPath::KsRsFallback,
+                            detAttack.bFastGroupTagMatched(),
+                            detAttack.bDetectionThresholdExceeded(),
+                            vecAttackLocatedIndexes,
+                            std::move(vecAttackSteps)
+                        )
+                    );
+
+                    for (std::uint32_t u32PacketIndex
+                        : vecReplacedPacketIndexes)
+                    {
+                        auto& vecCandidates = staReceiver
+                            .mapAdditionalCandidates[u32PacketIndex];
+                        auto itAttack = std::find_if(
+                            vecCandidates.begin(),
+                            vecCandidates.end(),
+                            [](const AdditionalCandidateRecord& recCandidate)
+                            {
+                                return recCandidate.typeSource
+                                    == protocol::PacketSourceType::AttackInjection;
+                            }
+                        );
+                        if (itAttack == vecCandidates.end())
+                        {
+                            continue;
+                        }
+
+                        itAttack->statusPacket = PacketStatus::Failed;
+                        queuePacketObservationLocked(
+                            staReceiver,
+                            protocol::UdpAuthenticationPacket(
+                                itAttack->udpPacket
+                            ),
+                            itAttack->vecRawDatagram,
+                            itAttack->u64ReceiveTimestampMilliseconds,
+                            itAttack->u64ObservationEventId,
+                            itAttack->u32DuplicateCount,
+                            protocol::PacketAuthenticationStatus::Failed,
+                            "TAMPERED_VARIANT: attack group failed FastGroupTag and entered KS+RS",
+                            itAttack->strActualSourceIp,
+                            itAttack->typeSource
+                        );
+                        queueFailureLocked(
+                            staReceiver,
+                            protocol::AuthenticationFailureType::TamperedVariant,
+                            itAttack->u64ObservationEventId,
+                            u32IntervalIndex,
+                            u32PacketIndex,
+                            u32GroupIndex,
+                            itAttack->strCandidateHash,
+                            detAttack.bDetectionThresholdExceeded()
+                                ? "ATTACK_DETECTED; DETECTION_THRESHOLD_EXCEEDED"
+                                : "ATTACK_DETECTED; attack candidate located by KS+RS fallback",
+                            "",
+                            "",
+                            vecAttackLocatedIndexes,
+                            itAttack->u32DuplicateCount,
+                            detAttack.bDetectionThresholdExceeded()
+                                ? protocol::ObservationSeverity::Warning
+                                : protocol::ObservationSeverity::Error,
+                            itAttack->strActualSourceIp
+                        );
+                    }
+                }
             }
 
             u32GroupFirstPacket = u32GroupLastPacket + 1U;
@@ -2489,6 +3089,7 @@ private:
     std::condition_variable m_cndState;
     std::thread m_thrWorker;
     std::map<ContextKey, std::unique_ptr<ReceiverState>> m_mapStates;
+    std::map<ContextKey, AttackSourceMapping> m_mapAttackSourceMappings;
     std::deque<QueuedDatagram> m_deqDatagrams;
     std::vector<protocol::AuthenticationObservation> m_vecPendingObservations;
     std::vector<metrics::AuthenticationMetricRecord> m_vecPendingMetrics;
@@ -2572,6 +3173,18 @@ void AuthenticationReceiverRuntime::resume(
 void AuthenticationReceiverRuntime::stop() noexcept
 {
     m_ptrImpl->stop(true);
+}
+
+void AuthenticationReceiverRuntime::applyAttackSourceMapping(
+    const protocol::AttackSourceMappingControlDetails& detMapping
+)
+{
+    m_ptrImpl->applyAttackSourceMapping(detMapping);
+}
+
+void AuthenticationReceiverRuntime::clearAttackSourceMappings() noexcept
+{
+    m_ptrImpl->clearAttackSourceMappings();
 }
 
 bool AuthenticationReceiverRuntime::bEnqueueDatagram(

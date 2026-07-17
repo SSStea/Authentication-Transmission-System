@@ -4,6 +4,7 @@
 #include "tesla/core/ReceiverAuthenticationContextStore.h"
 #include "tesla/metrics/AuthenticationMetrics.h"
 #include "tesla/protocol/MonitorControl.h"
+#include "tesla/protocol/ExperimentControl.h"
 #include "tesla/protocol/ProtocolTypes.h"
 
 #include <cstdint>
@@ -58,6 +59,12 @@ public:
         std::uint64_t u64ResumeTimestampMilliseconds
     );
     void stop() noexcept;
+
+    /** @brief 安装或清除仅对当前轮次有效的攻击源映射。 */
+    void applyAttackSourceMapping(
+        const protocol::AttackSourceMappingControlDetails& detMapping
+    );
+    void clearAttackSourceMappings() noexcept;
 
     bool bEnqueueDatagram(
         const std::string& strSourceIpAddress,

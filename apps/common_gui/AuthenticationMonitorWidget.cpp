@@ -7,12 +7,19 @@
 #include <QColor>
 #include <QComboBox>
 #include <QDateTime>
+#include <QFile>
+#include <QFileDialog>
 #include <QGridLayout>
 #include <QHeaderView>
+#include <QHBoxLayout>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QMessageBox>
 #include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QTabWidget>
@@ -34,6 +41,7 @@ namespace tesla::gui
 namespace
 {
 using namespace protocol;
+using namespace metrics;
 
 QString strHex(const ByteBuffer& vecBytes)
 {
@@ -46,6 +54,20 @@ QString strHex(const ByteBuffer& vecBytes)
         strValue.append(QLatin1Char(HEX[u8Value & 0x0FU]));
     }
     return strValue;
+}
+
+QString strCsv(const QString& strValue)
+{
+    QString strEscaped = strValue;
+    strEscaped.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+    return QLatin1Char('"') + strEscaped + QLatin1Char('"');
+}
+
+QString strMetricMode(AuthenticationMetricMode modeAuthentication)
+{
+    return modeAuthentication == AuthenticationMetricMode::Native
+        ? QStringLiteral("NATIVE")
+        : QStringLiteral("IMPROVED");
 }
 
 QString strBlock(const BinaryBlock& arrValue)
@@ -754,6 +776,9 @@ public:
         std::vector<DosSummaryControlDetails> vecDosSummaries
     )
     {
+        m_vecPackets = vecPackets;
+        m_vecFailures = vecFailures;
+        m_vecDosSummaries = vecDosSummaries;
         m_pPacketModel->setPackets(std::move(vecPackets));
         m_pFailureModel->setFailures(std::move(vecFailures));
         m_pProxyModel->setFailures(m_pFailureModel->vecFailures());
@@ -777,7 +802,406 @@ public:
         }
     }
 
+    void setMetricSnapshots(
+        std::vector<AuthenticationMetricRecord> vecMetrics
+    )
+    {
+        m_vecRoundArchives.clear();
+        for (AuthenticationMetricRecord& varMetric : vecMetrics)
+        {
+            if (auto* pArchive = std::get_if<
+                    AuthenticationRoundArchiveSummary
+                >(&varMetric))
+            {
+                m_vecRoundArchives.push_back(std::move(*pArchive));
+            }
+        }
+    }
+
 private:
+    void exportRoundArchives(bool bJson)
+    {
+        if (m_vecRoundArchives.empty())
+        {
+            QMessageBox::information(
+                m_pOwner,
+                QStringLiteral("导出逐轮记录"),
+                QStringLiteral("当前没有已经结束的逐轮归档记录。")
+            );
+            return;
+        }
+
+        const QString strSuffix = bJson
+            ? QStringLiteral("json")
+            : QStringLiteral("csv");
+        const QString strPath = QFileDialog::getSaveFileName(
+            m_pOwner,
+            QStringLiteral("导出本节点逐轮记录"),
+            QStringLiteral("tesla-round-records-%1.%2")
+                .arg(
+                    QDateTime::currentDateTime().toString(
+                        QStringLiteral("yyyyMMdd-HHmmss")
+                    ),
+                    strSuffix
+                ),
+            bJson ? QStringLiteral("JSON (*.json)") : QStringLiteral("CSV (*.csv)")
+        );
+        if (strPath.isEmpty())
+        {
+            return;
+        }
+
+        static const QString strCsvHeader = QStringLiteral(
+            "experimentId,runId,timestamp,gitCommit,nodeId,senderId,chainId,role,"
+            "authMode,cryptoAlgorithm,payloadHash,packetCount,packetsPerInterval,"
+            "intervalMs,disclosureDelay,groupSize,detectionThreshold,randomSeed,"
+            "configuredFault,configuredFaultValue,sentPackets,receivedPackets,"
+            "authenticatedPackets,failedPackets,missingPackets,fallbackGroupCount,"
+            "verifyTimeUs,receivedAuthBytes,estimatedEnergyMicroJoule,fileSize,"
+            "recoveredFileSize,recoveredFileHash,roundStatus,validSample,invalidReason\r\n"
+        );
+        QByteArray arrOutput;
+        QJsonArray arrJsonRecords;
+        if (!bJson)
+        {
+            arrOutput.append(strCsvHeader.toUtf8());
+        }
+
+        for (const AuthenticationRoundArchiveSummary& sumArchive
+            : m_vecRoundArchives)
+        {
+            const AuthenticationRoundArchiveConfiguration& cfgArchive =
+                sumArchive.cfgConfiguration();
+            const auto* pSender = std::get_if<SenderRoundArchiveDetails>(
+                &sumArchive.varDetails()
+            );
+            const auto* pReceiver = std::get_if<ReceiverRoundArchiveDetails>(
+                &sumArchive.varDetails()
+            );
+
+            const QString strRole = pSender != nullptr
+                ? QStringLiteral("SENDER") : QStringLiteral("RECEIVER");
+            const QString strConfiguredFault = pSender != nullptr
+                ? QString::fromStdString(pSender->strConfiguredFault())
+                : QStringLiteral("NOT_DISTRIBUTED");
+            const QString strConfiguredFaultValue = pSender != nullptr
+                ? QString::fromStdString(pSender->strConfiguredFaultValue())
+                : QString();
+            const std::uint64_t u64RandomSeed = pSender != nullptr
+                ? pSender->u64RandomSeed() : 0;
+            const std::uint32_t u32SentPackets = pSender != nullptr
+                ? pSender->u32SentPacketCount() : 0;
+            const std::uint32_t u32ReceivedPackets = pReceiver != nullptr
+                ? pReceiver->u32ReceivedPacketCount() : 0;
+            const std::uint32_t u32AuthenticatedPackets = pReceiver != nullptr
+                ? pReceiver->u32AuthenticatedPacketCount() : 0;
+            const std::uint32_t u32FailedPackets = pReceiver != nullptr
+                ? pReceiver->u32FailedPacketCount() : 0;
+            const std::uint32_t u32MissingPackets = pReceiver != nullptr
+                ? pReceiver->u32MissingPacketCount() : 0;
+            const std::uint32_t u32FallbackGroupCount = pReceiver != nullptr
+                ? pReceiver->u32FallbackGroupCount() : 0;
+            const std::uint64_t u64VerifyTimeNanoseconds = pReceiver != nullptr
+                ? pReceiver->u64VerifyTimeNanoseconds() : 0;
+            const std::uint64_t u64ReceivedAuthBytes = pReceiver != nullptr
+                ? pReceiver->u64ReceivedAuthBytes() : 0;
+            const double dEstimatedEnergyMicroJoule = pReceiver != nullptr
+                ? pReceiver->dEstimatedEnergyMicroJoule() : 0.0;
+            const std::uint64_t u64FileSize = pSender != nullptr
+                ? pSender->u64FileSize()
+                : pReceiver->u64FileSize();
+            const std::uint64_t u64RecoveredFileSize = pReceiver != nullptr
+                ? pReceiver->u64RecoveredFileSize() : 0;
+            const QString strRecoveredFileHash = pReceiver != nullptr
+                ? QString::fromStdString(pReceiver->strRecoveredFileHash())
+                : QString();
+
+            if (bJson)
+            {
+                QJsonObject objRecord;
+                objRecord.insert(QStringLiteral("experimentId"), QString::fromStdString(sumArchive.strExperimentId()));
+                objRecord.insert(QStringLiteral("runId"), QString::fromStdString(sumArchive.strRunId()));
+                objRecord.insert(QStringLiteral("timestamp"), QString::number(sumArchive.u64TimestampMilliseconds()));
+                objRecord.insert(QStringLiteral("gitCommit"), QString::fromStdString(sumArchive.strGitCommit()));
+                objRecord.insert(QStringLiteral("nodeId"), QString::fromStdString(sumArchive.strNodeId()));
+                objRecord.insert(QStringLiteral("senderId"), QString::fromStdString(sumArchive.strSenderId()));
+                objRecord.insert(QStringLiteral("chainId"), QString::number(sumArchive.u64ChainId()));
+                objRecord.insert(QStringLiteral("role"), strRole);
+                objRecord.insert(QStringLiteral("authMode"), strMetricMode(cfgArchive.modeAuthentication()));
+                objRecord.insert(QStringLiteral("cryptoAlgorithm"), QString::fromStdString(cfgArchive.strCryptoAlgorithm()));
+                objRecord.insert(QStringLiteral("payloadHash"), QString::fromStdString(cfgArchive.strPayloadHash()));
+                objRecord.insert(QStringLiteral("packetCount"), static_cast<qint64>(cfgArchive.u32PacketCount()));
+                objRecord.insert(QStringLiteral("packetsPerInterval"), static_cast<qint64>(cfgArchive.u32PacketsPerInterval()));
+                objRecord.insert(QStringLiteral("intervalMs"), static_cast<qint64>(cfgArchive.u32IntervalMilliseconds()));
+                objRecord.insert(QStringLiteral("disclosureDelay"), static_cast<qint64>(cfgArchive.u32DisclosureDelay()));
+                objRecord.insert(QStringLiteral("groupSize"), static_cast<qint64>(cfgArchive.u32GroupSize()));
+                objRecord.insert(QStringLiteral("detectionThreshold"), static_cast<qint64>(cfgArchive.u32DetectionThreshold()));
+                objRecord.insert(QStringLiteral("randomSeed"), QString::number(u64RandomSeed));
+                objRecord.insert(QStringLiteral("configuredFault"), strConfiguredFault);
+                objRecord.insert(QStringLiteral("configuredFaultValue"), strConfiguredFaultValue);
+                objRecord.insert(QStringLiteral("sentPackets"), static_cast<qint64>(u32SentPackets));
+                objRecord.insert(QStringLiteral("receivedPackets"), static_cast<qint64>(u32ReceivedPackets));
+                objRecord.insert(QStringLiteral("authenticatedPackets"), static_cast<qint64>(u32AuthenticatedPackets));
+                objRecord.insert(QStringLiteral("failedPackets"), static_cast<qint64>(u32FailedPackets));
+                objRecord.insert(QStringLiteral("missingPackets"), static_cast<qint64>(u32MissingPackets));
+                objRecord.insert(QStringLiteral("fallbackGroupCount"), static_cast<qint64>(u32FallbackGroupCount));
+                objRecord.insert(QStringLiteral("verifyTimeUs"), static_cast<double>(u64VerifyTimeNanoseconds) / 1000.0);
+                objRecord.insert(QStringLiteral("receivedAuthBytes"), QString::number(u64ReceivedAuthBytes));
+                objRecord.insert(QStringLiteral("estimatedEnergyMicroJoule"), dEstimatedEnergyMicroJoule);
+                objRecord.insert(QStringLiteral("fileSize"), QString::number(u64FileSize));
+                objRecord.insert(QStringLiteral("recoveredFileSize"), QString::number(u64RecoveredFileSize));
+                objRecord.insert(QStringLiteral("recoveredFileHash"), strRecoveredFileHash);
+                objRecord.insert(QStringLiteral("roundStatus"), QString::fromStdString(sumArchive.strRoundStatus()));
+                objRecord.insert(QStringLiteral("validSample"), sumArchive.bValidSample());
+                objRecord.insert(QStringLiteral("invalidReason"), QString::fromStdString(sumArchive.strInvalidReason()));
+                arrJsonRecords.append(objRecord);
+                continue;
+            }
+
+            const QStringList lstColumns{
+                strCsv(QString::fromStdString(sumArchive.strExperimentId())),
+                strCsv(QString::fromStdString(sumArchive.strRunId())),
+                QString::number(sumArchive.u64TimestampMilliseconds()),
+                strCsv(QString::fromStdString(sumArchive.strGitCommit())),
+                strCsv(QString::fromStdString(sumArchive.strNodeId())),
+                strCsv(QString::fromStdString(sumArchive.strSenderId())),
+                QString::number(sumArchive.u64ChainId()),
+                strRole,
+                strMetricMode(cfgArchive.modeAuthentication()),
+                strCsv(QString::fromStdString(cfgArchive.strCryptoAlgorithm())),
+                strCsv(QString::fromStdString(cfgArchive.strPayloadHash())),
+                QString::number(cfgArchive.u32PacketCount()),
+                QString::number(cfgArchive.u32PacketsPerInterval()),
+                QString::number(cfgArchive.u32IntervalMilliseconds()),
+                QString::number(cfgArchive.u32DisclosureDelay()),
+                QString::number(cfgArchive.u32GroupSize()),
+                QString::number(cfgArchive.u32DetectionThreshold()),
+                QString::number(u64RandomSeed),
+                strCsv(strConfiguredFault),
+                strCsv(strConfiguredFaultValue),
+                QString::number(u32SentPackets),
+                QString::number(u32ReceivedPackets),
+                QString::number(u32AuthenticatedPackets),
+                QString::number(u32FailedPackets),
+                QString::number(u32MissingPackets),
+                QString::number(u32FallbackGroupCount),
+                QString::number(static_cast<double>(u64VerifyTimeNanoseconds) / 1000.0, 'f', 3),
+                QString::number(u64ReceivedAuthBytes),
+                QString::number(dEstimatedEnergyMicroJoule, 'f', 9),
+                QString::number(u64FileSize),
+                QString::number(u64RecoveredFileSize),
+                strCsv(strRecoveredFileHash),
+                strCsv(QString::fromStdString(sumArchive.strRoundStatus())),
+                sumArchive.bValidSample() ? QStringLiteral("true") : QStringLiteral("false"),
+                strCsv(QString::fromStdString(sumArchive.strInvalidReason()))
+            };
+            arrOutput.append(
+                (lstColumns.join(QLatin1Char(',')) + QStringLiteral("\r\n")).toUtf8()
+            );
+        }
+
+        if (bJson)
+        {
+            QJsonObject objRoot;
+            objRoot.insert(QStringLiteral("exportedAtMs"), QString::number(
+                QDateTime::currentMSecsSinceEpoch()
+            ));
+            objRoot.insert(QStringLiteral("roundRecords"), arrJsonRecords);
+            arrOutput = QJsonDocument(objRoot).toJson(QJsonDocument::Indented);
+        }
+
+        QFile filOutput(strPath);
+        if (!filOutput.open(QIODevice::WriteOnly | QIODevice::Truncate)
+            || filOutput.write(arrOutput) != arrOutput.size())
+        {
+            QMessageBox::warning(
+                m_pOwner,
+                QStringLiteral("导出失败"),
+                filOutput.errorString()
+            );
+            return;
+        }
+
+        QMessageBox::information(
+            m_pOwner,
+            QStringLiteral("导出完成"),
+            QStringLiteral("已导出 %1 条本节点逐轮记录。")
+                .arg(static_cast<qulonglong>(m_vecRoundArchives.size()))
+        );
+    }
+
+    void exportSnapshots(bool bJson)
+    {
+        if (m_vecPackets.empty() && m_vecFailures.empty()
+            && m_vecDosSummaries.empty())
+        {
+            QMessageBox::information(
+                m_pOwner,
+                QStringLiteral("导出"),
+                QStringLiteral("当前没有可导出的本节点观测数据。")
+            );
+            return;
+        }
+
+        const QString strSuffix = bJson
+            ? QStringLiteral("json")
+            : QStringLiteral("csv");
+        const QString strPath = QFileDialog::getSaveFileName(
+            m_pOwner,
+            QStringLiteral("导出本节点逐轮原始数据"),
+            QStringLiteral("tesla-node-observations-%1.%2")
+                .arg(
+                    QDateTime::currentDateTime().toString(
+                        QStringLiteral("yyyyMMdd-HHmmss")
+                    ),
+                    strSuffix
+                ),
+            bJson ? QStringLiteral("JSON (*.json)") : QStringLiteral("CSV (*.csv)")
+        );
+        if (strPath.isEmpty())
+        {
+            return;
+        }
+
+        QByteArray arrOutput;
+        if (bJson)
+        {
+            QJsonArray arrPackets;
+            for (const auto& detPacket : m_vecPackets)
+            {
+                QJsonObject objPacket;
+                objPacket.insert(QStringLiteral("eventId"), QString::number(detPacket.u64EventId()));
+                objPacket.insert(QStringLiteral("timestampMs"), QString::number(detPacket.u64TimestampMilliseconds()));
+                objPacket.insert(QStringLiteral("roundId"), QString::fromStdString(detPacket.strRoundId()));
+                objPacket.insert(QStringLiteral("senderId"), QString::fromStdString(detPacket.strSenderId()));
+                objPacket.insert(QStringLiteral("senderIp"), QString::fromStdString(detPacket.strSenderIp()));
+                objPacket.insert(QStringLiteral("actualSourceIp"), QString::fromStdString(detPacket.strActualSourceIp()));
+                objPacket.insert(QStringLiteral("chainId"), QString::number(detPacket.u64ChainId()));
+                objPacket.insert(QStringLiteral("intervalIndex"), static_cast<qint64>(detPacket.u32IntervalIndex()));
+                objPacket.insert(QStringLiteral("packetIndex"), static_cast<qint64>(detPacket.u32PacketIndex()));
+                objPacket.insert(QStringLiteral("authenticationStatus"), strPacketStatus(detPacket.statusAuthentication()));
+                objPacket.insert(QStringLiteral("sourceType"), strSource(detPacket.typeSource()));
+                objPacket.insert(QStringLiteral("duplicateCount"), static_cast<qint64>(detPacket.u32DuplicateCount()));
+                objPacket.insert(QStringLiteral("reason"), QString::fromStdString(detPacket.strReason()));
+                objPacket.insert(QStringLiteral("rawDatagramHex"), strHex(detPacket.vecRawDatagram()));
+                arrPackets.append(objPacket);
+            }
+
+            QJsonArray arrFailures;
+            for (const auto& detFailure : m_vecFailures)
+            {
+                QJsonArray arrLocated;
+                for (const std::uint32_t u32Index : detFailure.vecLocatedPacketIndexes())
+                {
+                    arrLocated.append(static_cast<qint64>(u32Index));
+                }
+                QJsonObject objFailure;
+                objFailure.insert(QStringLiteral("eventId"), QString::number(detFailure.u64EventId()));
+                objFailure.insert(QStringLiteral("packetEventId"), QString::number(detFailure.u64PacketEventId()));
+                objFailure.insert(QStringLiteral("timestampMs"), QString::number(detFailure.u64TimestampMilliseconds()));
+                objFailure.insert(QStringLiteral("roundId"), QString::fromStdString(detFailure.strRoundId()));
+                objFailure.insert(QStringLiteral("senderId"), QString::fromStdString(detFailure.strSenderId()));
+                objFailure.insert(QStringLiteral("actualSourceIp"), QString::fromStdString(detFailure.strActualSourceIp()));
+                objFailure.insert(QStringLiteral("chainId"), QString::number(detFailure.u64ChainId()));
+                objFailure.insert(QStringLiteral("intervalIndex"), static_cast<qint64>(detFailure.u32IntervalIndex()));
+                objFailure.insert(QStringLiteral("packetIndex"), static_cast<qint64>(detFailure.u32PacketIndex()));
+                objFailure.insert(QStringLiteral("failureType"), strFailureType(detFailure.typeFailure()));
+                objFailure.insert(QStringLiteral("duplicateCount"), static_cast<qint64>(detFailure.u32DuplicateCount()));
+                objFailure.insert(QStringLiteral("reason"), QString::fromStdString(detFailure.strReason()));
+                objFailure.insert(QStringLiteral("locatedPacketIndexes"), arrLocated);
+                arrFailures.append(objFailure);
+            }
+
+            QJsonArray arrDosSummaries;
+            for (const auto& detSummary : m_vecDosSummaries)
+            {
+                QJsonObject objSummary;
+                objSummary.insert(QStringLiteral("timestampMs"), QString::number(detSummary.u64TimestampMilliseconds()));
+                objSummary.insert(QStringLiteral("windowMs"), static_cast<qint64>(detSummary.u32WindowMilliseconds()));
+                objSummary.insert(QStringLiteral("invalidPacketCount"), QString::number(detSummary.u64InvalidPacketCount()));
+                objSummary.insert(QStringLiteral("rateLimitedDropCount"), QString::number(detSummary.u64RateLimitedDropCount()));
+                objSummary.insert(QStringLiteral("legitimatePacketCount"), QString::number(detSummary.u64LegitimatePacketCount()));
+                objSummary.insert(QStringLiteral("receiveQueueOverflowCount"), QString::number(detSummary.u64ReceiveQueueOverflowCount()));
+                arrDosSummaries.append(objSummary);
+            }
+
+            QJsonObject objRoot;
+            objRoot.insert(QStringLiteral("exportedAtMs"), QDateTime::currentMSecsSinceEpoch());
+            objRoot.insert(QStringLiteral("packets"), arrPackets);
+            objRoot.insert(QStringLiteral("failures"), arrFailures);
+            objRoot.insert(QStringLiteral("dosSummaries"), arrDosSummaries);
+            arrOutput = QJsonDocument(objRoot).toJson(QJsonDocument::Indented);
+        }
+        else
+        {
+            arrOutput.append("recordType,timestampMs,roundId,senderId,actualSourceIp,chainId,intervalIndex,packetIndex,statusOrType,duplicateCount,rawDatagramHex,details\r\n");
+            for (const auto& detPacket : m_vecPackets)
+            {
+                const QString strLine = QStringLiteral("PACKET,%1,%2,%3,%4,%5,%6,%7,%8,%9,%10,%11\r\n")
+                    .arg(detPacket.u64TimestampMilliseconds())
+                    .arg(strCsv(QString::fromStdString(detPacket.strRoundId())))
+                    .arg(strCsv(QString::fromStdString(detPacket.strSenderId())))
+                    .arg(strCsv(QString::fromStdString(detPacket.strActualSourceIp())))
+                    .arg(detPacket.u64ChainId())
+                    .arg(detPacket.u32IntervalIndex())
+                    .arg(detPacket.u32PacketIndex())
+                    .arg(strCsv(strPacketStatus(detPacket.statusAuthentication())))
+                    .arg(detPacket.u32DuplicateCount())
+                    .arg(strCsv(strHex(detPacket.vecRawDatagram())))
+                    .arg(strCsv(QString::fromStdString(detPacket.strReason())));
+                arrOutput.append(strLine.toUtf8());
+            }
+            for (const auto& detFailure : m_vecFailures)
+            {
+                const QString strLine = QStringLiteral("FAILURE,%1,%2,%3,%4,%5,%6,%7,%8,%9,,%10\r\n")
+                    .arg(detFailure.u64TimestampMilliseconds())
+                    .arg(strCsv(QString::fromStdString(detFailure.strRoundId())))
+                    .arg(strCsv(QString::fromStdString(detFailure.strSenderId())))
+                    .arg(strCsv(QString::fromStdString(detFailure.strActualSourceIp())))
+                    .arg(detFailure.u64ChainId())
+                    .arg(detFailure.u32IntervalIndex())
+                    .arg(detFailure.u32PacketIndex())
+                    .arg(strCsv(strFailureType(detFailure.typeFailure())))
+                    .arg(detFailure.u32DuplicateCount())
+                    .arg(strCsv(QString::fromStdString(detFailure.strReason())));
+                arrOutput.append(strLine.toUtf8());
+            }
+            for (const auto& detSummary : m_vecDosSummaries)
+            {
+                const QString strDetails = QStringLiteral(
+                    "windowMs=%1; invalid=%2; limited=%3; legitimate=%4; overflow=%5"
+                )
+                    .arg(detSummary.u32WindowMilliseconds())
+                    .arg(detSummary.u64InvalidPacketCount())
+                    .arg(detSummary.u64RateLimitedDropCount())
+                    .arg(detSummary.u64LegitimatePacketCount())
+                    .arg(detSummary.u64ReceiveQueueOverflowCount());
+                const QString strLine = QStringLiteral("DOS_SUMMARY,%1,,,,,,,DOS_SUMMARY,,,%2\r\n")
+                    .arg(detSummary.u64TimestampMilliseconds())
+                    .arg(strCsv(strDetails));
+                arrOutput.append(strLine.toUtf8());
+            }
+        }
+
+        QFile filOutput(strPath);
+        if (!filOutput.open(QIODevice::WriteOnly | QIODevice::Truncate)
+            || filOutput.write(arrOutput) != arrOutput.size())
+        {
+            QMessageBox::warning(
+                m_pOwner,
+                QStringLiteral("导出失败"),
+                filOutput.errorString()
+            );
+            return;
+        }
+
+        QMessageBox::information(
+            m_pOwner,
+            QStringLiteral("导出完成"),
+            QStringLiteral("本节点观测原始数据已导出。")
+        );
+    }
+
     void createPages()
     {
         QVBoxLayout* pRootLayout = new QVBoxLayout(m_pOwner);
@@ -785,6 +1209,29 @@ private:
 
         QWidget* pPacketPage = new QWidget(m_pTabs);
         QVBoxLayout* pPacketLayout = new QVBoxLayout(pPacketPage);
+        QHBoxLayout* pExportLayout = new QHBoxLayout();
+        QPushButton* pExportCsvButton = new QPushButton(
+            QStringLiteral("导出本节点CSV"),
+            pPacketPage
+        );
+        QPushButton* pExportJsonButton = new QPushButton(
+            QStringLiteral("导出本节点JSON"),
+            pPacketPage
+        );
+        QPushButton* pExportRoundCsvButton = new QPushButton(
+            QStringLiteral("导出逐轮CSV"),
+            pPacketPage
+        );
+        QPushButton* pExportRoundJsonButton = new QPushButton(
+            QStringLiteral("导出逐轮JSON"),
+            pPacketPage
+        );
+        pExportLayout->addWidget(pExportCsvButton);
+        pExportLayout->addWidget(pExportJsonButton);
+        pExportLayout->addWidget(pExportRoundCsvButton);
+        pExportLayout->addWidget(pExportRoundJsonButton);
+        pExportLayout->addStretch();
+        pPacketLayout->addLayout(pExportLayout);
         QGridLayout* pFilters = new QGridLayout();
         m_pQuickButtons = new QButtonGroup(m_pOwner);
         m_pQuickButtons->setExclusive(true);
@@ -882,6 +1329,42 @@ private:
         {
             clearFilters();
         });
+        QObject::connect(
+            pExportCsvButton,
+            &QPushButton::clicked,
+            m_pOwner,
+            [this]()
+            {
+                exportSnapshots(false);
+            }
+        );
+        QObject::connect(
+            pExportJsonButton,
+            &QPushButton::clicked,
+            m_pOwner,
+            [this]()
+            {
+                exportSnapshots(true);
+            }
+        );
+        QObject::connect(
+            pExportRoundCsvButton,
+            &QPushButton::clicked,
+            m_pOwner,
+            [this]()
+            {
+                exportRoundArchives(false);
+            }
+        );
+        QObject::connect(
+            pExportRoundJsonButton,
+            &QPushButton::clicked,
+            m_pOwner,
+            [this]()
+            {
+                exportRoundArchives(true);
+            }
+        );
     }
 
     void connectActions()
@@ -1095,6 +1578,10 @@ private:
     QLabel*                       m_pDosLabel;
     QButtonGroup*                 m_pQuickButtons{nullptr};
     std::vector<QPushButton*>     m_vecQuickButtons;
+    std::vector<PacketObservationControlDetails> m_vecPackets;
+    std::vector<PacketFailureControlDetails> m_vecFailures;
+    std::vector<DosSummaryControlDetails> m_vecDosSummaries;
+    std::vector<AuthenticationRoundArchiveSummary> m_vecRoundArchives;
 };
 
 AuthenticationMonitorWidget::AuthenticationMonitorWidget(QWidget* pParent)
@@ -1119,5 +1606,12 @@ void AuthenticationMonitorWidget::setSnapshots(
         std::move(vecFailures),
         std::move(vecDosSummaries)
     );
+}
+
+void AuthenticationMonitorWidget::setMetricSnapshots(
+    std::vector<metrics::AuthenticationMetricRecord> vecMetrics
+)
+{
+    m_pImpl->setMetricSnapshots(std::move(vecMetrics));
 }
 }

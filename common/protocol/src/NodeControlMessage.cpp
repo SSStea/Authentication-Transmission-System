@@ -182,6 +182,23 @@ NodeControlMessageType NodeControlMessage::typeMessage() const noexcept
         return NodeControlMessageType::AuthenticationConfigAcknowledgement;
     }
 
+    if (std::holds_alternative<FaultInjectionControlDetails>(m_varDetails))
+    {
+        return NodeControlMessageType::FaultInjectionConfig;
+    }
+
+    if (std::holds_alternative<AttackSourceMappingControlDetails>(m_varDetails))
+    {
+        return NodeControlMessageType::AttackSourceMapping;
+    }
+
+    if (std::holds_alternative<ExperimentControlAcknowledgementDetails>(
+            m_varDetails
+        ))
+    {
+        return NodeControlMessageType::ExperimentControlAcknowledgement;
+    }
+
     if (std::holds_alternative<AuthenticationRoundCommandControlDetails>(m_varDetails))
     {
         switch (std::get<AuthenticationRoundCommandControlDetails>(

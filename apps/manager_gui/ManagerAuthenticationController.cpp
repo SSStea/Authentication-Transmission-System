@@ -37,6 +37,23 @@ crypto::CryptoAlgorithm algCore(
     throw std::invalid_argument("Unsupported authentication algorithm");
 }
 
+protocol::AuthenticationCryptoAlgorithm algControl(
+    crypto::CryptoAlgorithm algCrypto
+)
+{
+    switch (algCrypto)
+    {
+    case crypto::CryptoAlgorithm::Sha256:
+        return protocol::AuthenticationCryptoAlgorithm::Sha256;
+    case crypto::CryptoAlgorithm::Sm3:
+        return protocol::AuthenticationCryptoAlgorithm::Sm3;
+    case crypto::CryptoAlgorithm::Sha3_256:
+        return protocol::AuthenticationCryptoAlgorithm::Sha3_256;
+    }
+
+    throw std::invalid_argument("Unsupported authentication algorithm");
+}
+
 core::TeslaAuthenticationMode modeCore(
     protocol::UdpAuthenticationMode modeControl
 )
@@ -287,6 +304,9 @@ ManagerAuthenticationController::ManagerAuthenticationController(
       m_autAuthority(m_rngSecureRandom),
       m_bConfigurationRejected(false),
       m_bConfigurationReady(false),
+      m_bFaultConfigured(false),
+      m_bFaultRejected(false),
+      m_bFaultReady(false),
       m_bRoundRunning(false),
       m_bRoundPaused(false),
       m_bFileRound(false),
@@ -330,6 +350,7 @@ bool ManagerAuthenticationController::bPrepareTextRound(
 
         resetPreparedRound();
         m_bFileRound = false;
+        m_strRoundId = QUuid::createUuid().toString(QUuid::WithoutBraces);
         std::map<QString, ManagerNodeSnapshot> mapSnapshots;
         for (const ManagerNodeSnapshot& snpNode : vecNodeSnapshots)
         {
@@ -546,6 +567,7 @@ bool ManagerAuthenticationController::bPrepareFileRound(
 
         resetPreparedRound();
         m_bFileRound = true;
+        m_strRoundId = QUuid::createUuid().toString(QUuid::WithoutBraces);
         std::map<QString, ManagerNodeSnapshot> mapSnapshots;
         for (const ManagerNodeSnapshot& snpNode : vecNodeSnapshots)
         {
@@ -740,14 +762,36 @@ bool ManagerAuthenticationController::bPrepareFileRound(
 
 bool ManagerAuthenticationController::bStartRound(QString& strError)
 {
+    return bStartRoundAt(u64NowMilliseconds() + 2000U, strError);
+}
+
+bool ManagerAuthenticationController::bStartRoundAt(
+    std::uint64_t u64StartTimestampMilliseconds,
+    QString& strError
+)
+{
     if (!m_bConfigurationReady || m_bRoundRunning)
     {
         strError = QStringLiteral("配置尚未全部确认或轮次已在运行");
         return false;
     }
+    if (!m_setPendingFaultRequests.isEmpty() || m_bFaultRejected
+        || (m_bFaultConfigured && !m_bFaultReady))
+    {
+        strError = QStringLiteral("故障注入计划尚未完成节点确认");
+        return false;
+    }
+    if (u64StartTimestampMilliseconds <= u64NowMilliseconds() + 100U)
+    {
+        strError = QStringLiteral("统一启动时间过近");
+        return false;
+    }
 
-    m_strRoundId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    m_u64TimelineStartTimestampMilliseconds = u64NowMilliseconds() + 2000U;
+    if (m_strRoundId.isEmpty())
+    {
+        m_strRoundId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    }
+    m_u64TimelineStartTimestampMilliseconds = u64StartTimestampMilliseconds;
     m_u32TimelineFirstInterval = 1;
     m_u32PauseAfterInterval = 0;
     m_u64PauseTimestampMilliseconds = 0;
@@ -766,7 +810,7 @@ bool ManagerAuthenticationController::bStartRound(QString& strError)
             0,
             strRollbackError
         );
-        m_strRoundId.clear();
+        // 回滚只停止已收到开始命令的节点；保留已配置轮次ID以允许修复连接后重试。
         return false;
     }
 
@@ -880,9 +924,85 @@ bool ManagerAuthenticationController::bStopRound(QString& strError)
     return true;
 }
 
+bool ManagerAuthenticationController::bConfigureFaultPlan(
+    int nSenderContextIndex,
+    tesla::protocol::AuthenticationFaultDetails varFaultDetails,
+    QString& strError
+)
+{
+    if (!m_bConfigurationReady || m_bRoundRunning)
+    {
+        strError = QStringLiteral("需要先完成空闲认证轮次配置");
+        return false;
+    }
+    if (nSenderContextIndex < 0
+        || nSenderContextIndex >= static_cast<int>(m_vecSenderTargets.size()))
+    {
+        strError = QStringLiteral("故障注入目标Sender无效");
+        return false;
+    }
+    if (!m_setPendingFaultRequests.isEmpty())
+    {
+        strError = QStringLiteral("已有故障注入计划等待节点确认");
+        return false;
+    }
+
+    const SenderTarget& tgtSender = m_vecSenderTargets.at(
+        static_cast<std::size_t>(nSenderContextIndex)
+    );
+    const QString strRequestId = strCreateRequestId(
+        QStringLiteral("fault-plan")
+    );
+    const tesla::protocol::FaultInjectionControlDetails detFault(
+        strRequestId.toStdString(),
+        m_strRoundId.toStdString(),
+        tgtSender.matMaterial.strSenderId(),
+        tgtSender.matMaterial.u64ChainId(),
+        std::move(varFaultDetails)
+    );
+
+    m_setPendingFaultRequests.insert(strRequestId);
+    m_bFaultConfigured = true;
+    m_bFaultRejected = false;
+    m_bFaultReady = false;
+    if (!m_ctlNetwork.bSendNodeControl(
+            tgtSender.strEndpointKey,
+            tesla::protocol::NodeControlMessage(detFault)
+        ))
+    {
+        m_setPendingFaultRequests.remove(strRequestId);
+        m_bFaultRejected = true;
+        strError = QStringLiteral("向目标Sender下发故障注入计划失败");
+        emit faultPlanStateChanged(false, strError);
+        return false;
+    }
+
+    strError.clear();
+    emit faultPlanStateChanged(
+        false,
+        QStringLiteral("故障注入计划已下发，等待目标Sender确认")
+    );
+    return true;
+}
+
 bool ManagerAuthenticationController::bConfigurationReady() const noexcept
 {
     return m_bConfigurationReady;
+}
+
+bool ManagerAuthenticationController::bFaultConfigured() const noexcept
+{
+    return m_bFaultConfigured;
+}
+
+bool ManagerAuthenticationController::bFaultPlanPending() const noexcept
+{
+    return !m_setPendingFaultRequests.isEmpty();
+}
+
+bool ManagerAuthenticationController::bFaultPlanReady() const noexcept
+{
+    return !m_bFaultConfigured || m_bFaultReady;
 }
 
 bool ManagerAuthenticationController::bRoundRunning() const noexcept
@@ -893,6 +1013,95 @@ bool ManagerAuthenticationController::bRoundRunning() const noexcept
 bool ManagerAuthenticationController::bRoundPaused() const noexcept
 {
     return m_bRoundPaused;
+}
+
+QString ManagerAuthenticationController::strRoundId() const noexcept
+{
+    return m_strRoundId;
+}
+
+QVector<tesla::protocol::AttackRoundContextControlDetails>
+ManagerAuthenticationController::vecAttackRoundContexts() const
+{
+    QVector<tesla::protocol::AttackRoundContextControlDetails> vecContexts;
+    vecContexts.reserve(static_cast<qsizetype>(m_vecSenderTargets.size()));
+    for (const SenderTarget& tgtSender : m_vecSenderTargets)
+    {
+        const tesla::core::SenderAuthenticationMaterial& matMaterial =
+            tgtSender.matMaterial;
+        const tesla::core::AuthenticationRoundParameters& prmRound =
+            matMaterial.prmRoundParameters();
+
+        std::uint32_t u32GroupSize = 0;
+        std::uint32_t u32DetectionThreshold = 0;
+        std::size_t   nTauCount = 0;
+        if (prmRound.optImprovedParameters().has_value())
+        {
+            u32GroupSize =
+                prmRound.optImprovedParameters()->u32GroupSize();
+            u32DetectionThreshold =
+                prmRound.optImprovedParameters()->u32DetectionThreshold();
+            nTauCount =
+                prmRound.optImprovedParameters()->nTauCount();
+        }
+
+        vecContexts.emplaceBack(
+            strCreateRequestId(QStringLiteral("attack-context")).toStdString(),
+            m_strRoundId.toStdString(),
+            matMaterial.strSenderId(),
+            tgtSender.strIpAddress.toStdString(),
+            matMaterial.u64ChainId(),
+            algControl(prmRound.algCryptoAlgorithm()),
+            prmRound.modeAuthentication()
+                    == tesla::core::TeslaAuthenticationMode::Native
+                ? tesla::protocol::UdpAuthenticationMode::Native
+                : tesla::protocol::UdpAuthenticationMode::Improved,
+            prmRound.u32TotalPacketCount(),
+            prmRound.u32PacketsPerInterval(),
+            prmRound.u32IntervalMilliseconds(),
+            prmRound.u32DisclosureDelay(),
+            prmRound.u64StartTimestampMilliseconds(),
+            u32GroupSize,
+            u32DetectionThreshold,
+            nTauCount
+        );
+    }
+    return vecContexts;
+}
+
+QString ManagerAuthenticationController::strSenderEndpointKey(
+    int nSenderContextIndex
+) const
+{
+    if (nSenderContextIndex < 0
+        || nSenderContextIndex >= static_cast<int>(m_vecSenderTargets.size()))
+    {
+        return {};
+    }
+    return m_vecSenderTargets.at(
+        static_cast<std::size_t>(nSenderContextIndex)
+    ).strEndpointKey;
+}
+
+QVector<QString> ManagerAuthenticationController::vecReceiverEndpointKeys(
+    int nSenderContextIndex
+) const
+{
+    QVector<QString> vecEndpoints;
+    const QString strSenderEndpoint = strSenderEndpointKey(nSenderContextIndex);
+    if (strSenderEndpoint.isEmpty())
+    {
+        return vecEndpoints;
+    }
+
+    for (const QString& strEndpointKey : m_setParticipantEndpoints)
+    {
+        if (strEndpointKey != strSenderEndpoint)
+        {
+            vecEndpoints.push_back(strEndpointKey);
+        }
+    }
+    return vecEndpoints;
 }
 
 void ManagerAuthenticationController::processNodeControlJson(
@@ -957,6 +1166,41 @@ void ManagerAuthenticationController::processNodeControlJson(
         {
             emit resultMessage(QStringLiteral("节点拒绝轮次命令：%1")
                 .arg(QString::fromStdString(detAck.strMessage())));
+        }
+        return;
+    }
+
+    if (msgMessage.typeMessage()
+        == NodeControlMessageType::ExperimentControlAcknowledgement)
+    {
+        const ExperimentControlAcknowledgementDetails& detAck = std::get<
+            ExperimentControlAcknowledgementDetails
+        >(msgMessage.varDetails());
+        const QString strRequestId = QString::fromStdString(
+            detAck.strRequestId()
+        );
+        if (!m_setPendingFaultRequests.remove(strRequestId))
+        {
+            return;
+        }
+
+        if (!detAck.bAccepted())
+        {
+            m_bFaultRejected = true;
+            m_bFaultReady = false;
+            emit faultPlanStateChanged(
+                false,
+                QStringLiteral("目标Sender拒绝故障注入计划：%1")
+                    .arg(QString::fromStdString(detAck.strMessage()))
+            );
+        }
+        else if (m_setPendingFaultRequests.isEmpty())
+        {
+            m_bFaultReady = true;
+            emit faultPlanStateChanged(
+                true,
+                QStringLiteral("故障注入计划已确认")
+            );
         }
         return;
     }
@@ -1104,7 +1348,11 @@ void ManagerAuthenticationController::processNodeControlJson(
 void ManagerAuthenticationController::handleNodeStateChanged()
 {
     if (m_setPendingConfigurationRequests.isEmpty()
-        || m_setParticipantEndpoints.isEmpty())
+        && m_setPendingFaultRequests.isEmpty())
+    {
+        return;
+    }
+    if (m_setParticipantEndpoints.isEmpty())
     {
         return;
     }
@@ -1124,12 +1372,19 @@ void ManagerAuthenticationController::handleNodeStateChanged()
         {
             // 连接断开后不会再收到配置ACK，立即结束等待，避免界面永久卡住。
             m_setPendingConfigurationRequests.clear();
+            m_setPendingFaultRequests.clear();
             m_bConfigurationRejected = true;
             m_bConfigurationReady = false;
+            m_bFaultRejected = true;
+            m_bFaultReady = false;
             emit configurationStateChanged(
                 false,
                 QStringLiteral("参与节点 %1 已断开，本轮配置已取消")
                     .arg(strEndpointKey)
+            );
+            emit faultPlanStateChanged(
+                false,
+                QStringLiteral("参与节点断开，故障注入计划已取消")
             );
             return;
         }
@@ -1255,9 +1510,13 @@ void ManagerAuthenticationController::resetPreparedRound()
     m_vecSenderTargets.clear();
     m_setParticipantEndpoints.clear();
     m_setPendingConfigurationRequests.clear();
+    m_setPendingFaultRequests.clear();
     m_setReceivedResultKeys.clear();
     m_bConfigurationRejected = false;
     m_bConfigurationReady = false;
+    m_bFaultConfigured = false;
+    m_bFaultRejected = false;
+    m_bFaultReady = false;
     m_bRoundPaused = false;
     m_bFileRound = false;
     m_strRoundId.clear();

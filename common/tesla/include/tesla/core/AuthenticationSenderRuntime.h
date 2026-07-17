@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tesla/core/AuthenticationRuntimeTypes.h"
+#include "tesla/core/AuthenticationFaultInjection.h"
 #include "tesla/core/LocalSenderKeyChainObservation.h"
 #include "tesla/core/SenderAuthenticationContext.h"
 #include "tesla/metrics/AuthenticationMetrics.h"
@@ -62,6 +63,10 @@ public:
     );
     /** @brief 清除上一轮已经预生成的报文，防止新CA配置误用旧载荷。 */
     void resetConfiguration() noexcept;
+    /** @brief 为当前已配置Sender安装一轮单一故障策略。 */
+    void configureFault(protocol::AuthenticationFaultDetails varFaultDetails);
+    /** @brief 清除故障策略，后续轮次恢复正常发送。 */
+    void clearFault() noexcept;
     void start(
         std::string strRoundId,
         std::uint64_t u64StartTimestampMilliseconds
