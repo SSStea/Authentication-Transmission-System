@@ -4,7 +4,10 @@
 #include "tesla/core/ImprovedTeslaDetails.h"
 #include "tesla/core/NativeTeslaDetails.h"
 #include "tesla/crypto/CryptoTypes.h"
+#include "tesla/metrics/PerformanceCounterSampler.h"
 
+#include <cstddef>
+#include <functional>
 #include <variant>
 
 namespace tesla::core
@@ -20,6 +23,12 @@ using TeslaVerificationDetails = std::variant<
     NativeVerificationDetails,
     ImprovedVerificationDetails
 >;
+
+/** @brief 策略完成一个原生单包或改进完整分组采样后的回调。 */
+using VerificationMeasurementHandler = std::function<void(
+    std::size_t,
+    const metrics::PerformanceMeasurement&
+)>;
 
 /** @brief 组合总体通过状态和当前模式专用验证详情。 */
 class TeslaVerificationResult final
@@ -65,13 +74,17 @@ public:
      * @param grpInput 保留实际丢包位置的接收组算法输入。
      * @param varReceivedDetails 当前模式接收到的认证详情variant。
      * @param digDataKey 已验证披露的当前TESLA间隔数据密钥。
+     * @param pPerformanceSampler 可选的真实耗时及硬件计数采样策略。
+     * @param fnMeasurementHandler 每个模式采样单位完成后的回调。
      * @return 总体状态和模式专用验证详情。
      * @throws std::invalid_argument variant模式或输入尺寸与当前策略不匹配时抛出。
      */
     virtual TeslaVerificationResult vfyVerify(
         const AuthenticationGroupInput& grpInput,
         const TeslaAuthenticationDetails& varReceivedDetails,
-        const crypto::Digest& digDataKey
+        const crypto::Digest& digDataKey,
+        metrics::VerificationPerformanceSampler* pPerformanceSampler = nullptr,
+        VerificationMeasurementHandler fnMeasurementHandler = {}
     ) const = 0;
 };
 }

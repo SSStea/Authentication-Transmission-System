@@ -2,6 +2,7 @@
 
 #include "tesla/core/AuthenticationRuntimeTypes.h"
 #include "tesla/core/ReceiverAuthenticationContextStore.h"
+#include "tesla/metrics/AuthenticationMetrics.h"
 #include "tesla/protocol/MonitorControl.h"
 #include "tesla/protocol/ProtocolTypes.h"
 
@@ -26,10 +27,14 @@ public:
     using ObservationHandler = std::function<void(
         const protocol::AuthenticationObservation&
     )>;
+    using MetricHandler = std::function<void(
+        const metrics::AuthenticationMetricRecord&
+    )>;
 
     explicit AuthenticationReceiverRuntime(
         ResultHandler fnResultHandler,
-        ObservationHandler fnObservationHandler = {}
+        ObservationHandler fnObservationHandler = {},
+        MetricHandler fnMetricHandler = {}
     );
     ~AuthenticationReceiverRuntime();
 

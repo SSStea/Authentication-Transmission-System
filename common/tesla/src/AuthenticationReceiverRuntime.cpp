@@ -11,6 +11,8 @@
 #include "tesla/crypto/CryptoUtilities.h"
 #include "tesla/crypto/KeyChain.h"
 #include "tesla/crypto/OpenSslCryptoProvider.h"
+#include "tesla/metrics/CommunicationCost.h"
+#include "tesla/metrics/PerformanceCounterSampler.h"
 #include "tesla/protocol/UdpAuthenticationPacket.h"
 #include "tesla/protocol/UdpAuthenticationPacketCodec.h"
 #include "tesla/workload/FileWorkload.h"
@@ -165,7 +167,10 @@ public:
         std::map<std::uint32_t, std::vector<AdditionalCandidateRecord>>
             mapAdditionalCandidates;
         std::map<std::uint32_t, crypto::Digest> mapDisclosedKeys;
+        std::set<std::uint32_t>        setCountedDisclosureKeyIndexes;
         std::set<std::uint32_t>        setVerifiedIntervals;
+        std::optional<metrics::AuthenticationRoundMetricCollector>
+            optMetricCollector;
         std::vector<TimelineSegment>   vecTimeline;
         std::optional<std::uint32_t>   optPauseAfterInterval;
         std::uint64_t                  u64PauseTimestampMilliseconds = 0;
@@ -175,6 +180,7 @@ public:
         bool                           bPaused = false;
         bool                           bProtocolIncomplete = false;
         bool                           bResultReported = false;
+        bool                           bMetricSummaryQueued = false;
     };
 
     struct QueuedDatagram final
@@ -186,10 +192,15 @@ public:
 
     Impl(
         ResultHandler fnResultHandler,
-        ObservationHandler fnObservationHandler
+        ObservationHandler fnObservationHandler,
+        MetricHandler fnMetricHandler
     )
         : m_fnResultHandler(std::move(fnResultHandler)),
-          m_fnObservationHandler(std::move(fnObservationHandler))
+          m_fnObservationHandler(std::move(fnObservationHandler)),
+          m_fnMetricHandler(std::move(fnMetricHandler)),
+          m_ptrPerformanceSampler(
+              metrics::ptrCreateVerificationPerformanceSampler()
+          )
     {
         if (!m_fnResultHandler)
         {
@@ -303,7 +314,26 @@ public:
             );
             staReceiver.mapAdditionalCandidates.clear();
             staReceiver.mapDisclosedKeys.clear();
+            staReceiver.setCountedDisclosureKeyIndexes.clear();
             staReceiver.setVerifiedIntervals.clear();
+            if (m_fnMetricHandler)
+            {
+                const AuthenticationRoundParameters& prmRound =
+                    staReceiver.ctxContext.prmRoundParameters();
+                staReceiver.optMetricCollector.emplace(
+                    strRoundId,
+                    staReceiver.ctxContext.strSenderId(),
+                    staReceiver.ctxContext.u64ChainId(),
+                    prmRound.modeAuthentication() == TeslaAuthenticationMode::Native
+                        ? metrics::AuthenticationMetricMode::Native
+                        : metrics::AuthenticationMetricMode::Improved,
+                    u32PacketCount
+                );
+            }
+            else
+            {
+                staReceiver.optMetricCollector.reset();
+            }
             staReceiver.vecTimeline = {
                 TimelineSegment{1, u64StartTimestampMilliseconds}
             };
@@ -316,6 +346,7 @@ public:
             staReceiver.bPaused = false;
             staReceiver.bProtocolIncomplete = false;
             staReceiver.bResultReported = false;
+            staReceiver.bMetricSummaryQueued = false;
         }
 
         m_strRoundId = std::move(strRoundId);
@@ -410,6 +441,7 @@ public:
     void stop(bool bReportResults) noexcept
     {
         std::vector<AuthenticationRuntimeResult> vecResults;
+        std::vector<metrics::AuthenticationMetricRecord> vecMetrics;
 
         {
             std::lock_guard<std::mutex> lckState(m_mtxState);
@@ -439,9 +471,11 @@ public:
             m_bRunning = false;
             m_bPaused = false;
             m_deqDatagrams.clear();
+            vecMetrics.swap(m_vecPendingMetrics);
         }
 
         emitResults(vecResults);
+        emitMetrics(vecMetrics);
     }
 
     bool bEnqueueDatagram(
@@ -458,6 +492,7 @@ public:
         {
             std::lock_guard<std::mutex> lckState(m_mtxState);
             ++m_u64InvalidWindowCount;
+            disqualifyActiveMetricComparisonsLocked();
             if (m_u32DetailedInvalidWindowCount < 16U)
             {
                 ++m_u32DetailedInvalidWindowCount;
@@ -491,6 +526,7 @@ public:
             || !itState->second->bActive)
         {
             ++m_u64InvalidWindowCount;
+            disqualifyActiveMetricComparisonsLocked();
             if (m_u32DetailedInvalidWindowCount < 16U)
             {
                 ++m_u32DetailedInvalidWindowCount;
@@ -514,6 +550,11 @@ public:
             ++m_nDroppedQueueDatagramCount;
             ++m_u64RateLimitedWindowCount;
             ++m_u64QueueOverflowWindowCount;
+            if (itState->second->optMetricCollector.has_value())
+            {
+                itState->second->optMetricCollector
+                    ->markNormalComparisonIneligible();
+            }
             return false;
         }
 
@@ -586,6 +627,21 @@ public:
     }
 
 private:
+    void disqualifyActiveMetricComparisonsLocked() noexcept
+    {
+        // 无法绑定Sender的攻击或无效流量仍会污染同期实验，因此排除所有活动轮次。
+        for (auto& prState : m_mapStates)
+        {
+            ReceiverState& staReceiver = *prState.second;
+            if (staReceiver.bActive
+                && staReceiver.optMetricCollector.has_value())
+            {
+                staReceiver.optMetricCollector
+                    ->markNormalComparisonIneligible();
+            }
+        }
+    }
+
     static protocol::PacketAuthenticationStatus statusMap(
         PacketStatus statusPacket
     ) noexcept
@@ -679,7 +735,7 @@ private:
     }
 
     void queueFailureLocked(
-        const ReceiverState& staReceiver,
+        ReceiverState& staReceiver,
         protocol::AuthenticationFailureType typeFailure,
         std::uint64_t u64PacketEventId,
         std::uint32_t u32IntervalIndex,
@@ -694,6 +750,12 @@ private:
         protocol::ObservationSeverity sevSeverity
     )
     {
+        if (staReceiver.optMetricCollector.has_value())
+        {
+            // 任何结构化失败都说明本轮不是无攻击、无丢失的正常对比样本。
+            staReceiver.optMetricCollector->markNormalComparisonIneligible();
+        }
+
         if (!m_fnObservationHandler)
         {
             return;
@@ -827,6 +889,28 @@ private:
         }
     }
 
+    void emitMetrics(
+        const std::vector<metrics::AuthenticationMetricRecord>& vecMetrics
+    ) noexcept
+    {
+        if (!m_fnMetricHandler)
+        {
+            return;
+        }
+
+        for (const metrics::AuthenticationMetricRecord& varMetric : vecMetrics)
+        {
+            try
+            {
+                m_fnMetricHandler(varMetric);
+            }
+            catch (...)
+            {
+                // 指标展示或传输失败不得改变Receiver认证结果。
+            }
+        }
+    }
+
     void validateActiveRound(const std::string& strRoundId) const
     {
         if (!m_bRunning || m_strRoundId != strRoundId)
@@ -842,6 +926,7 @@ private:
             std::optional<QueuedDatagram> optDatagram;
             std::vector<AuthenticationRuntimeResult> vecResults;
             std::vector<protocol::AuthenticationObservation> vecObservations;
+            std::vector<metrics::AuthenticationMetricRecord> vecMetrics;
 
             {
                 std::unique_lock<std::mutex> lckState(m_mtxState);
@@ -873,10 +958,12 @@ private:
                 checkPauseAndTimeoutsLocked(vecResults);
                 queueDosSummaryIfDueLocked(u64NowMilliseconds());
                 vecObservations.swap(m_vecPendingObservations);
+                vecMetrics.swap(m_vecPendingMetrics);
             }
 
             emitResults(vecResults);
             emitObservations(vecObservations);
+            emitMetrics(vecMetrics);
         }
     }
 
@@ -1164,6 +1251,7 @@ private:
         recPacket.strCandidateHash = strCandidateHash;
         recPacket.u32DuplicateCount = 1;
         ++staReceiver.u32ReceivedPacketCount;
+        recordReceivedDataFieldsLocked(staReceiver, udpData);
         queuePacketObservationLocked(
             staReceiver,
             udpPacket,
@@ -1184,6 +1272,40 @@ private:
                 vecResults
             );
         }
+    }
+
+    void recordReceivedDataFieldsLocked(
+        ReceiverState& staReceiver,
+        const protocol::UdpDataPacket& udpData
+    )
+    {
+        if (!staReceiver.optMetricCollector.has_value())
+        {
+            return;
+        }
+
+        if (std::holds_alternative<protocol::NativeUdpAuthenticationDetails>(
+                udpData.varAuthenticationDetails()
+            ))
+        {
+            staReceiver.optMetricCollector->addReceivedAuthBytes(
+                metrics::CommunicationCostCalculator::u64NativeDataPacketBytes()
+            );
+            return;
+        }
+
+        const auto& detImproved = std::get<
+            protocol::ImprovedUdpAuthenticationDetails
+        >(udpData.varAuthenticationDetails());
+        const std::size_t nTauCount = detImproved.optGroupDetails().has_value()
+            ? detImproved.optGroupDetails()->vecSamdTau().size()
+            : 0;
+        staReceiver.optMetricCollector->addReceivedAuthBytes(
+            metrics::CommunicationCostCalculator::u64ImprovedDataPacketBytes(
+                nTauCount,
+                detImproved.optGroupDetails().has_value()
+            )
+        );
     }
 
     bool bIsPacketTimeSafe(
@@ -1275,15 +1397,40 @@ private:
             prmRound.algCryptoAlgorithm()
         );
         crypto::Digest digCurrent = digMapBlock(arrDisclosedKey);
-        if (!crypto::KeyChainVerifier::bVerifyDisclosedKey(
+        const bool bMeasureKey =
+            staReceiver.optMetricCollector.has_value()
+            && m_ptrPerformanceSampler != nullptr;
+        if (bMeasureKey)
+        {
+            m_ptrPerformanceSampler->begin();
+        }
+        const bool bKeyVerified = crypto::KeyChainVerifier::bVerifyDisclosedKey(
                 crpProvider,
                 digCurrent,
                 u32DisclosedKeyIndex,
                 staReceiver.ctxContext.digCommitmentKey()
-            ))
+            );
+        if (bMeasureKey)
+        {
+            staReceiver.optMetricCollector->addDisclosureKeyMeasurement(
+                m_ptrPerformanceSampler->mstEnd()
+            );
+        }
+
+        if (!bKeyVerified)
         {
             staReceiver.bProtocolIncomplete = true;
             return false;
+        }
+
+        if (staReceiver.optMetricCollector.has_value()
+            && staReceiver.setCountedDisclosureKeyIndexes.insert(
+                u32DisclosedKeyIndex
+            ).second)
+        {
+            staReceiver.optMetricCollector->addReceivedAuthBytes(
+                metrics::CommunicationCostCalculator::u64DisclosedKeyBytes()
+            );
         }
 
         // 后续合法密钥可沿单向链补回此前丢失的旧披露密钥。
@@ -1401,6 +1548,32 @@ private:
         );
     }
 
+    void queueVerificationMetricLocked(
+        ReceiverState& staReceiver,
+        std::uint32_t u32PacketCount,
+        const metrics::PerformanceMeasurement& mstPerformance,
+        metrics::VerificationMetricDetails varDetails
+    )
+    {
+        if (!staReceiver.optMetricCollector.has_value())
+        {
+            return;
+        }
+
+        metrics::VerificationMetricSample smpVerification(
+            m_u64NextMetricEventId++,
+            u64NowMilliseconds(),
+            staReceiver.strRoundId,
+            staReceiver.ctxContext.strSenderId(),
+            staReceiver.ctxContext.u64ChainId(),
+            u32PacketCount,
+            mstPerformance,
+            std::move(varDetails)
+        );
+        staReceiver.optMetricCollector->addVerificationSample(smpVerification);
+        m_vecPendingMetrics.emplace_back(std::move(smpVerification));
+    }
+
     void verifyNativeIntervalLocked(
         ReceiverState& staReceiver,
         std::uint32_t u32IntervalIndex,
@@ -1453,13 +1626,42 @@ private:
             prmRound.algCryptoAlgorithm()
         );
         const NativeTeslaStrategy stgStrategy(crpProvider);
+        std::vector<std::pair<std::size_t, metrics::PerformanceMeasurement>>
+            vecMeasurements;
+        VerificationMeasurementHandler fnMeasurementHandler;
+        if (staReceiver.optMetricCollector.has_value())
+        {
+            fnMeasurementHandler = [&vecMeasurements](
+                std::size_t nPosition,
+                const metrics::PerformanceMeasurement& mstPerformance
+            )
+            {
+                vecMeasurements.emplace_back(nPosition, mstPerformance);
+            };
+        }
         const TeslaVerificationResult vfyResult = stgStrategy.vfyVerify(
             grpInput,
             NativeAuthenticationDetails(std::move(vecMacs)),
-            digDataKey
+            digDataKey,
+            m_ptrPerformanceSampler.get(),
+            std::move(fnMeasurementHandler)
         );
         const NativeVerificationDetails& detResult =
             std::get<NativeVerificationDetails>(vfyResult.varDetails());
+
+        for (const auto& prMeasurement : vecMeasurements)
+        {
+            queueVerificationMetricLocked(
+                staReceiver,
+                1,
+                prMeasurement.second,
+                metrics::NativeVerificationMetricDetails(
+                    u32IntervalIndex,
+                    u32FirstPacketIndex
+                        + static_cast<std::uint32_t>(prMeasurement.first)
+                )
+            );
+        }
 
         for (std::size_t nPosition = 0;
              nPosition < detResult.vecPacketStatuses().size();
@@ -1595,16 +1797,58 @@ private:
                 }
             }
 
+            std::optional<metrics::PerformanceMeasurement> optMeasurement;
+            VerificationMeasurementHandler fnMeasurementHandler;
+            if (staReceiver.optMetricCollector.has_value())
+            {
+                fnMeasurementHandler = [&optMeasurement](
+                    std::size_t,
+                    const metrics::PerformanceMeasurement& mstPerformance
+                )
+                {
+                    optMeasurement = mstPerformance;
+                };
+            }
             const TeslaVerificationResult vfyResult = stgStrategy.vfyVerify(
                 grpInput,
                 ImprovedAuthenticationDetails(
                     std::move(vecTau),
                     optFastGroupTag
                 ),
-                digDataKey
+                digDataKey,
+                m_ptrPerformanceSampler.get(),
+                std::move(fnMeasurementHandler)
             );
             const ImprovedVerificationDetails& detResult =
                 std::get<ImprovedVerificationDetails>(vfyResult.varDetails());
+
+            metrics::VerificationMetricPath pathMetric =
+                metrics::VerificationMetricPath::KsRsFallback;
+            if (detResult.pathVerification()
+                == ImprovedVerificationPath::FastGroupPass)
+            {
+                pathMetric = metrics::VerificationMetricPath::FastGroupPass;
+            }
+            else if (detResult.pathVerification()
+                == ImprovedVerificationPath::IncompleteGroupTags)
+            {
+                pathMetric =
+                    metrics::VerificationMetricPath::IncompleteGroupTags;
+            }
+            if (optMeasurement.has_value())
+            {
+                queueVerificationMetricLocked(
+                    staReceiver,
+                    u32GroupLastPacket - u32GroupFirstPacket + 1U,
+                    optMeasurement.value(),
+                    metrics::ImprovedVerificationMetricDetails(
+                        u32GroupIndex,
+                        u32GroupFirstPacket,
+                        u32GroupLastPacket,
+                        pathMetric
+                    )
+                );
+            }
 
             if (detResult.pathVerification()
                 == ImprovedVerificationPath::IncompleteGroupTags)
@@ -1873,6 +2117,26 @@ private:
         }
     }
 
+    void queueEnergySummaryLocked(
+        ReceiverState& staReceiver,
+        AuthenticationRuntimeResultStatus statusResult
+    )
+    {
+        if (!staReceiver.optMetricCollector.has_value()
+            || staReceiver.bMetricSummaryQueued)
+        {
+            return;
+        }
+
+        m_vecPendingMetrics.emplace_back(
+            staReceiver.optMetricCollector->sumCreateEnergySummary(
+                u64NowMilliseconds(),
+                statusResult == AuthenticationRuntimeResultStatus::Completed
+            )
+        );
+        staReceiver.bMetricSummaryQueued = true;
+    }
+
     AuthenticationRuntimeResult finalizeLocked(ReceiverState& staReceiver)
     {
         const AuthenticationRoundParameters& prmRound =
@@ -1956,6 +2220,7 @@ private:
                 : "Receiver did not authenticate every expected file packet";
         }
 
+        queueEnergySummaryLocked(staReceiver, statusResult);
         updateGlobalRunningLocked();
         return AuthenticationRuntimeResult(
             staReceiver.strRoundId,
@@ -1973,10 +2238,10 @@ private:
     }
 
     AuthenticationRuntimeResult resCreateResult(
-        const ReceiverState& staReceiver,
+        ReceiverState& staReceiver,
         AuthenticationRuntimeResultStatus statusResult,
         const std::string& strMessage
-    ) const
+    )
     {
         const std::uint32_t u32Expected = staReceiver.ctxContext
             .prmRoundParameters().u32TotalPacketCount();
@@ -1989,6 +2254,7 @@ private:
             PacketStatus::Failed
         );
 
+        queueEnergySummaryLocked(staReceiver, statusResult);
         return AuthenticationRuntimeResult(
             staReceiver.strRoundId,
             staReceiver.ctxContext.strSenderId(),
@@ -2215,6 +2481,9 @@ private:
 
     ResultHandler      m_fnResultHandler;
     ObservationHandler m_fnObservationHandler;
+    MetricHandler      m_fnMetricHandler;
+    std::unique_ptr<metrics::VerificationPerformanceSampler>
+        m_ptrPerformanceSampler;
 
     mutable std::mutex m_mtxState;
     std::condition_variable m_cndState;
@@ -2222,9 +2491,11 @@ private:
     std::map<ContextKey, std::unique_ptr<ReceiverState>> m_mapStates;
     std::deque<QueuedDatagram> m_deqDatagrams;
     std::vector<protocol::AuthenticationObservation> m_vecPendingObservations;
+    std::vector<metrics::AuthenticationMetricRecord> m_vecPendingMetrics;
     std::string m_strRoundId;
     std::size_t m_nDroppedQueueDatagramCount = 0;
     std::uint64_t m_u64NextObservationEventId = (1ULL << 40U);
+    std::uint64_t m_u64NextMetricEventId = 1;
     std::uint64_t m_u64DosWindowStartMilliseconds = 0;
     std::uint64_t m_u64InvalidWindowCount = 0;
     std::uint64_t m_u64RateLimitedWindowCount = 0;
@@ -2239,11 +2510,13 @@ private:
 
 AuthenticationReceiverRuntime::AuthenticationReceiverRuntime(
     ResultHandler fnResultHandler,
-    ObservationHandler fnObservationHandler
+    ObservationHandler fnObservationHandler,
+    MetricHandler fnMetricHandler
 )
     : m_ptrImpl(std::make_unique<Impl>(
           std::move(fnResultHandler),
-          std::move(fnObservationHandler)
+          std::move(fnObservationHandler),
+          std::move(fnMetricHandler)
       ))
 {
 }

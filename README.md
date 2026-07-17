@@ -8,7 +8,7 @@
 - 绝对路径：`D:\0_Tesla_Authenticication_Protocol\Authentication_Transmission_System`
 - Git 远端：`https://github.com/SSStea/Authentication-Transmission-System.git`
 - 开发指南：`D:\0_Tesla_Authenticication_Protocol\TESLA_SYSTEM_DEVELOPMENT_GUIDE_DRAFT.md`
-- 当前阶段：阶段 7 代码与自动化验收已完成，等待真实图片/设备联调和提交确认
+- 当前阶段：阶段 9A 通信、计算和估算能耗指标已实现并通过 Windows/WSL 自动化验证；实机连续轮次性能门槛留待部署实验验收
 
 旧仓库只作为已验证逻辑的阅读来源，不作为本仓库的子模块，也不得整体复制旧工程。
 
@@ -36,6 +36,8 @@ tests/
 ├── integration_tests/
 ├── stage6_tests/
 ├── stage7_tests/
+├── stage8_tests/
+├── stage9_tests/
 └── gui_stage5_tests/
 ```
 
@@ -63,12 +65,15 @@ tests/
 - `SenderAuthenticationContext`、`ReceiverAuthenticationContextStore`：分别维护私有Sender状态和公开Receiver状态；
 - `AuthenticationSenderRuntime`、`AuthenticationReceiverRuntime`：可停止线程、绝对时间调度、有界接收以及文本/文件认证恢复；
 - `AuthenticationNodeRuntime`：PC节点和Linux NodeAgent共用的配置、轮次命令与结果适配入口；
-- `ManagerAuthenticationController`：集中管理端CA签发、配置确认和统一暂停/恢复时间线。
+- `ManagerAuthenticationController`：集中管理端CA签发、配置确认和统一暂停/恢复时间线；
+- `AuthenticationMetrics`：验证采样、模式专用指标详情、整轮估算能耗和有界快照存储；
+- `CommunicationCost`：严格按TESLA算法字段计算和累计通信开销；
+- `PerformanceCounterSampler`：统一单调时钟采样，并在Linux可用时读取CPU与Cache硬件计数器。
 
 密码提供者与安全随机源接口、CA、原生/改进策略实现、控制JSON Codec、UDP二进制Codec和
 NodeAgent各网络服务继续独立，保留安全边界、策略边界和序列化边界。
 
-阶段 1 提供可构建、可启动的最小程序入口。阶段 2 实现三种密码套件、密钥链、原生/改进TESLA策略、快速组认证和KS+RS回退。阶段 3 实现无Qt公共协议库、Linux POSIX NodeAgent运行时、TCP管理、UDP发现和TESLA组播。阶段 4 实现安全随机源、CA独立材料签发、Sender本地密钥链自检、Receiver公开上下文映射和事务性TCP配置。阶段 5 建立四套独立GUI职责框架，并实现节点发现、MANAGER/MONITOR连接、PC节点Qt管理服务、攻击端独立控制服务和只读组播监听。阶段 6 实现手动文本的原生/改进TESLA真实传输、统一开始/暂停/恢复/停止、节点结果上报、时钟同步阻断、运行时调度超限判定以及Qt有界发送队列。阶段 7 实现文件TCP分块上传、固定32B认证切片、Receiver按固定槽位认证恢复、SHA-256结果上报、管理端大小与Hash比较以及恢复文件原子落盘。阶段 8 实现真实TX/RX报文观测、异常筛选与跳转、结构化失败/DoS汇总、MONITOR断线快照恢复、PC本地完整密钥链及KS+RS定位过程展示；通信/计算/估算能耗指标与攻击执行仍按阶段 9 至阶段 10 分别确认后实现。
+阶段 1 提供可构建、可启动的最小程序入口。阶段 2 实现三种密码套件、密钥链、原生/改进TESLA策略、快速组认证和KS+RS回退。阶段 3 实现无Qt公共协议库、Linux POSIX NodeAgent运行时、TCP管理、UDP发现和TESLA组播。阶段 4 实现安全随机源、CA独立材料签发、Sender本地密钥链自检、Receiver公开上下文映射和事务性TCP配置。阶段 5 建立四套独立GUI职责框架，并实现节点发现、MANAGER/MONITOR连接、PC节点Qt管理服务、攻击端独立控制服务和只读组播监听。阶段 6 实现手动文本的原生/改进TESLA真实传输、统一开始/暂停/恢复/停止、节点结果上报、时钟同步阻断、运行时调度超限判定以及Qt有界发送队列。阶段 7 实现文件TCP分块上传、固定32B认证切片、Receiver按固定槽位认证恢复、SHA-256结果上报、管理端大小与Hash比较以及恢复文件原子落盘。阶段 8 实现真实TX/RX报文观测、异常筛选与跳转、结构化失败/DoS汇总、MONITOR断线快照恢复、PC本地完整密钥链及KS+RS定位过程展示。阶段 9 实现仅统计TESLA算法字段的通信开销、真实验证耗时、Linux可选硬件计数、固定文献系数估算能耗、路径分类、MONITOR批量指标与断线快照，以及无人机计算/估算能耗图表；攻击执行仍按阶段 10 单独确认后实现。
 
 ## Windows 构建
 

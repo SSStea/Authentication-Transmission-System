@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tesla/protocol/AuthenticationControl.h"
+#include "tesla/protocol/MetricControl.h"
 #include "tesla/protocol/MonitorControl.h"
 
 #include <cstdint>
@@ -38,8 +39,11 @@ enum class NodeControlMessageType
     PacketFailureEvent,
     ImprovedGroupObservationEvent,
     DosSummaryEvent,
+    MetricEvent,
     AbnormalEventSnapshotRequest,
     AbnormalEventSnapshot,
+    MetricSnapshotRequest,
+    MetricSnapshot,
     ErrorResponse
 };
 
@@ -132,7 +136,9 @@ using NodeControlMessageDetails = std::variant<
     PacketFailureControlDetails,
     ImprovedGroupObservationControlDetails,
     DosSummaryControlDetails,
+    MetricEventControlDetails,
     AbnormalEventSnapshotControlDetails,
+    MetricSnapshotControlDetails,
     ErrorResponseControlDetails
 >;
 

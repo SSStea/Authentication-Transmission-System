@@ -69,6 +69,7 @@ target_compile_features(tesla_core PUBLIC cxx_std_17)
 target_link_libraries(tesla_core
     PUBLIC
         tesla_crypto
+        tesla_metrics
         tesla_protocol
         tesla_workload
 )

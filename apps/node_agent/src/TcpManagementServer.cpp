@@ -30,6 +30,9 @@ constexpr int MAX_PENDING_CONNECTIONS = 32;
 constexpr std::size_t MAX_CLIENTS = 32;
 constexpr std::size_t MAX_MONITOR_EVENT_QUEUE = 4096;
 constexpr std::size_t ABNORMAL_SNAPSHOT_BATCH_SIZE = 64;
+constexpr std::size_t MAX_METRIC_EVENT_QUEUE = 8192;
+constexpr std::size_t METRIC_BATCH_SIZE = 64;
+constexpr std::chrono::milliseconds METRIC_BATCH_WAIT(25);
 
 void closeSocket(std::atomic<int>& nSocket) noexcept
 {
@@ -139,7 +142,8 @@ TcpManagementServer::TcpManagementServer(
     RuntimeStateProvider fnStateProvider,
     ControlMessageHandler fnControlMessageHandler,
     FilePayloadHandler fnFilePayloadHandler,
-    AbnormalSnapshotProvider fnAbnormalSnapshotProvider
+    AbnormalSnapshotProvider fnAbnormalSnapshotProvider,
+    MetricSnapshotProvider fnMetricSnapshotProvider
 )
     : m_strBindAddress(std::move(strBindAddress)),
       m_u16Port(u16Port),
@@ -147,7 +151,8 @@ TcpManagementServer::TcpManagementServer(
       m_fnStateProvider(std::move(fnStateProvider)),
       m_fnControlMessageHandler(std::move(fnControlMessageHandler)),
       m_fnFilePayloadHandler(std::move(fnFilePayloadHandler)),
-      m_fnAbnormalSnapshotProvider(std::move(fnAbnormalSnapshotProvider))
+      m_fnAbnormalSnapshotProvider(std::move(fnAbnormalSnapshotProvider)),
+      m_fnMetricSnapshotProvider(std::move(fnMetricSnapshotProvider))
 {
     if (!m_fnStateProvider)
     {
@@ -172,6 +177,13 @@ TcpManagementServer::TcpManagementServer(
     {
         throw std::invalid_argument(
             "TCP management server requires an abnormal snapshot provider"
+        );
+    }
+
+    if (!m_fnMetricSnapshotProvider)
+    {
+        throw std::invalid_argument(
+            "TCP management server requires a metric snapshot provider"
         );
     }
 }
@@ -238,6 +250,7 @@ void TcpManagementServer::stop() noexcept
     {
         std::lock_guard<std::mutex> lckQueue(m_mtxMonitorQueue);
         m_deqMonitorQueue.clear();
+        m_deqMetricQueue.clear();
     }
     m_cndMonitorQueue.notify_all();
     closeSocket(m_nListenSocket);
@@ -274,6 +287,7 @@ void TcpManagementServer::stop() noexcept
     {
         std::lock_guard<std::mutex> lckQueue(m_mtxMonitorQueue);
         m_deqMonitorQueue.clear();
+        m_deqMetricQueue.clear();
     }
 }
 
@@ -369,8 +383,31 @@ void TcpManagementServer::enqueueMonitorObservation(
     }
 }
 
+void TcpManagementServer::enqueueMonitorMetric(
+    const metrics::AuthenticationMetricRecord& varMetric
+) noexcept
+{
+    try
+    {
+        std::lock_guard<std::mutex> lckQueue(m_mtxMonitorQueue);
+        if (m_deqMetricQueue.size() >= MAX_METRIC_EVENT_QUEUE)
+        {
+            ++m_nDroppedMonitorEventCount;
+            return;
+        }
+
+        m_deqMetricQueue.push_back(varMetric);
+        m_cndMonitorQueue.notify_one();
+    }
+    catch (...)
+    {
+        ++m_nDroppedMonitorEventCount;
+    }
+}
+
 void TcpManagementServer::monitorBroadcastLoop()
 {
+    bool bPreferMetricBatch = true;
     while (true)
     {
         std::optional<protocol::NodeControlMessage> optMessage;
@@ -380,16 +417,72 @@ void TcpManagementServer::monitorBroadcastLoop()
                 lckQueue,
                 [this]()
                 {
-                    return !m_bRunning.load() || !m_deqMonitorQueue.empty();
+                    return !m_bRunning.load()
+                        || !m_deqMonitorQueue.empty()
+                        || !m_deqMetricQueue.empty();
                 }
             );
-            if (!m_bRunning.load() && m_deqMonitorQueue.empty())
+            if (!m_bRunning.load()
+                && m_deqMonitorQueue.empty()
+                && m_deqMetricQueue.empty())
             {
                 return;
             }
 
-            optMessage = std::move(m_deqMonitorQueue.front());
-            m_deqMonitorQueue.pop_front();
+            const bool bHasMetrics = !m_deqMetricQueue.empty();
+            const bool bHasObservations = !m_deqMonitorQueue.empty();
+            const bool bSendMetricBatch = bHasMetrics
+                && (!bHasObservations || bPreferMetricBatch);
+            if (bHasMetrics && bHasObservations)
+            {
+                // 两类高频队列同时有数据时交替发送，避免指标或异常观测长期饥饿。
+                bPreferMetricBatch = !bPreferMetricBatch;
+            }
+
+            if (bSendMetricBatch)
+            {
+                // 低速指标最多等待25 ms以合并同一TCP帧；达到批量上限、停止或有观测事件时立即发送。
+                if (m_deqMetricQueue.size() < METRIC_BATCH_SIZE
+                    && m_deqMonitorQueue.empty()
+                    && m_bRunning.load())
+                {
+                    m_cndMonitorQueue.wait_for(
+                        lckQueue,
+                        METRIC_BATCH_WAIT,
+                        [this]()
+                        {
+                            return !m_bRunning.load()
+                                || m_deqMetricQueue.size()
+                                    >= METRIC_BATCH_SIZE
+                                || !m_deqMonitorQueue.empty();
+                        }
+                    );
+                    if (!m_deqMonitorQueue.empty())
+                    {
+                        bPreferMetricBatch = false;
+                    }
+                }
+
+                std::vector<metrics::AuthenticationMetricRecord> vecMetrics;
+                const std::size_t nBatchSize = std::min(
+                    METRIC_BATCH_SIZE,
+                    m_deqMetricQueue.size()
+                );
+                vecMetrics.reserve(nBatchSize);
+                for (std::size_t nIndex = 0; nIndex < nBatchSize; ++nIndex)
+                {
+                    vecMetrics.push_back(std::move(m_deqMetricQueue.front()));
+                    m_deqMetricQueue.pop_front();
+                }
+                optMessage.emplace(protocol::MetricEventControlDetails(
+                    std::move(vecMetrics)
+                ));
+            }
+            else
+            {
+                optMessage = std::move(m_deqMonitorQueue.front());
+                m_deqMonitorQueue.pop_front();
+            }
         }
 
         std::vector<std::shared_ptr<ClientConnection>> vecClients;
@@ -850,6 +943,68 @@ bool TcpManagementServer::bHandleFrame(
                             static_cast<std::uint32_t>(nBatchIndex + 1U),
                             nBatchIndex + 1U == nBatchCount,
                             std::move(vecPacketBatch),
+                            std::move(vecBatch)
+                        )
+                    )
+                ))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    if (msgMessage.typeMessage()
+        == protocol::NodeControlMessageType::MetricSnapshotRequest)
+    {
+        const std::string& strRequestId = std::get<
+            protocol::RequestControlDetails
+        >(msgMessage.varDetails()).strRequestId();
+        if (roleClient != protocol::TcpClientRole::Monitor)
+        {
+            return bSendControlMessage(
+                ptrClient,
+                protocol::NodeControlMessage(
+                    protocol::ErrorResponseControlDetails(
+                        strRequestId,
+                        "METRIC_SNAPSHOT_MONITOR_ONLY",
+                        "Only MONITOR clients may request metric snapshots"
+                    )
+                )
+            );
+        }
+
+        const std::vector<metrics::AuthenticationMetricRecord> vecMetrics =
+            m_fnMetricSnapshotProvider();
+        const std::size_t nBatchCount = std::max<std::size_t>(
+            1,
+            (vecMetrics.size() + METRIC_BATCH_SIZE - 1U) / METRIC_BATCH_SIZE
+        );
+        for (std::size_t nBatchIndex = 0;
+             nBatchIndex < nBatchCount;
+             ++nBatchIndex)
+        {
+            const std::size_t nFirst = nBatchIndex * METRIC_BATCH_SIZE;
+            const std::size_t nLast = std::min(
+                vecMetrics.size(),
+                nFirst + METRIC_BATCH_SIZE
+            );
+            std::vector<metrics::AuthenticationMetricRecord> vecBatch;
+            if (nFirst < nLast)
+            {
+                vecBatch.assign(
+                    vecMetrics.begin() + static_cast<std::ptrdiff_t>(nFirst),
+                    vecMetrics.begin() + static_cast<std::ptrdiff_t>(nLast)
+                );
+            }
+
+            if (!bSendControlMessage(
+                    ptrClient,
+                    protocol::NodeControlMessage(
+                        protocol::MetricSnapshotControlDetails(
+                            strRequestId,
+                            static_cast<std::uint32_t>(nBatchIndex + 1U),
+                            nBatchIndex + 1U == nBatchCount,
                             std::move(vecBatch)
                         )
                     )

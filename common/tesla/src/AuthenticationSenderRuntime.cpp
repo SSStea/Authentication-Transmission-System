@@ -7,6 +7,7 @@
 #include "tesla/core/NativeTeslaDetails.h"
 #include "tesla/core/NativeTeslaStrategy.h"
 #include "tesla/crypto/OpenSslCryptoProvider.h"
+#include "tesla/metrics/CommunicationCost.h"
 #include "tesla/protocol/UdpAuthenticationPacket.h"
 #include "tesla/protocol/UdpAuthenticationPacketCodec.h"
 
@@ -127,12 +128,14 @@ public:
         ResultHandler fnResultHandler,
         ObservationHandler fnObservationHandler,
         LocalKeyChainHandler fnLocalKeyChainHandler,
+        MetricHandler fnMetricHandler,
         std::string strLocalIpAddress
     )
         : m_fnDatagramSender(std::move(fnDatagramSender)),
           m_fnResultHandler(std::move(fnResultHandler)),
           m_fnObservationHandler(std::move(fnObservationHandler)),
           m_fnLocalKeyChainHandler(std::move(fnLocalKeyChainHandler)),
+          m_fnMetricHandler(std::move(fnMetricHandler)),
           m_strLocalIpAddress(std::move(strLocalIpAddress))
     {
         if (!m_fnDatagramSender || !m_fnResultHandler)
@@ -275,6 +278,22 @@ public:
             m_optResumeInterval.reset();
             m_u32CurrentInterval = 0;
             m_u32SentDataPacketCount = 0;
+            m_bCommunicationMetricEmitted = false;
+            if (m_fnMetricHandler)
+            {
+                const TeslaAuthenticationMode modeAuthentication =
+                    m_optSenderContext->matMaterial().prmRoundParameters()
+                        .modeAuthentication();
+                m_optCommunicationAccumulator.emplace(
+                    modeAuthentication == TeslaAuthenticationMode::Native
+                        ? metrics::AuthenticationMetricMode::Native
+                        : metrics::AuthenticationMetricMode::Improved
+                );
+            }
+            else
+            {
+                m_optCommunicationAccumulator.reset();
+            }
         }
 
         m_thrWorker = std::thread([this]()
@@ -839,6 +858,12 @@ private:
                 const bool bSent = m_fnDatagramSender(
                     intDatagrams.vecDatagrams[nDatagramIndex]
                 );
+                if (bSent)
+                {
+                    recordSentAuthenticationFields(
+                        intDatagrams.vecDatagrams[nDatagramIndex]
+                    );
+                }
                 emitPacketObservation(
                     intDatagrams.vecDatagrams[nDatagramIndex],
                     bSent,
@@ -1051,6 +1076,75 @@ private:
         }
     }
 
+    void recordSentAuthenticationFields(
+        const protocol::ByteBuffer& vecDatagram
+    ) noexcept
+    {
+        if (!m_optCommunicationAccumulator.has_value()
+            || !m_optSenderContext.has_value())
+        {
+            return;
+        }
+
+        try
+        {
+            const AuthenticationRoundParameters& prmRound =
+                m_optSenderContext->matMaterial().prmRoundParameters();
+            const protocol::UdpAuthenticationPacketDecodeResult resPacket =
+                protocol::UdpAuthenticationPacketCodec::resDecode(
+                    vecDatagram,
+                    ctxCreatePacketContext(prmRound)
+                );
+            if (!std::holds_alternative<protocol::UdpAuthenticationPacket>(
+                    resPacket
+                ))
+            {
+                return;
+            }
+
+            const protocol::UdpAuthenticationPacket& udpPacket = std::get<
+                protocol::UdpAuthenticationPacket
+            >(resPacket);
+            if (!udpPacket.bIsDataPacket())
+            {
+                m_optCommunicationAccumulator->addDisclosedKey();
+                return;
+            }
+
+            const protocol::UdpDataPacket& udpData = std::get<
+                protocol::UdpDataPacket
+            >(udpPacket.varDetails());
+            if (udpData.optDisclosedKey().has_value())
+            {
+                m_optCommunicationAccumulator->addDisclosedKey();
+            }
+
+            if (std::holds_alternative<
+                    protocol::NativeUdpAuthenticationDetails
+                >(udpData.varAuthenticationDetails()))
+            {
+                m_optCommunicationAccumulator->addNativeDataPacket();
+                return;
+            }
+
+            const auto& detImproved = std::get<
+                protocol::ImprovedUdpAuthenticationDetails
+            >(udpData.varAuthenticationDetails());
+            const std::size_t nTauCount =
+                detImproved.optGroupDetails().has_value()
+                ? detImproved.optGroupDetails()->vecSamdTau().size()
+                : 0;
+            m_optCommunicationAccumulator->addImprovedDataPacket(
+                nTauCount,
+                detImproved.optGroupDetails().has_value()
+            );
+        }
+        catch (...)
+        {
+            // 指标累计失败不能改变真实UDP发送结果。
+        }
+    }
+
     void emitKeyChainProgress(
         std::uint32_t u32LogicalInterval,
         bool bCompleted
@@ -1167,6 +1261,8 @@ private:
             std::uint64_t u64ChainId = 0;
             std::uint32_t u32ExpectedPacketCount = 0;
             std::uint32_t u32SentPacketCount = 0;
+            std::optional<metrics::CommunicationCostMetricSummary>
+                optCommunicationSummary;
             AuthenticationRuntimeResultDetails varResultDetails =
                 TextAuthenticationRuntimeResultDetails("");
 
@@ -1187,6 +1283,20 @@ private:
                     u32ExpectedPacketCount
                 );
 
+                if (m_fnMetricHandler
+                    && m_optCommunicationAccumulator.has_value()
+                    && !m_bCommunicationMetricEmitted)
+                {
+                    optCommunicationSummary =
+                        m_optCommunicationAccumulator->sumCreate(
+                            u64NowMilliseconds(),
+                            strRoundId,
+                            strSenderId,
+                            u64ChainId
+                        );
+                    m_bCommunicationMetricEmitted = true;
+                }
+
                 if (m_optPayloadWorkload.has_value()
                     && std::holds_alternative<workload::FileWorkload>(
                         m_optPayloadWorkload.value()
@@ -1198,6 +1308,20 @@ private:
                                 m_optPayloadWorkload.value()
                             ).u64OriginalByteCount()
                         );
+                }
+            }
+
+            if (optCommunicationSummary.has_value())
+            {
+                try
+                {
+                    m_fnMetricHandler(metrics::AuthenticationMetricRecord(
+                        std::move(optCommunicationSummary.value())
+                    ));
+                }
+                catch (...)
+                {
+                    // 通信开销展示失败不能阻止Sender上报认证结果。
                 }
             }
 
@@ -1227,6 +1351,7 @@ private:
     ResultHandler  m_fnResultHandler;
     ObservationHandler m_fnObservationHandler;
     LocalKeyChainHandler m_fnLocalKeyChainHandler;
+    MetricHandler       m_fnMetricHandler;
     std::string          m_strLocalIpAddress;
 
     mutable std::mutex              m_mtxState;
@@ -1234,6 +1359,8 @@ private:
     std::thread                     m_thrWorker;
     std::optional<SenderAuthenticationContext> m_optSenderContext;
     std::optional<SenderPayloadWorkload>        m_optPayloadWorkload;
+    std::optional<metrics::CommunicationCostAccumulator>
+        m_optCommunicationAccumulator;
     std::vector<IntervalDatagrams>  m_vecIntervals;
     std::string                     m_strRoundId;
     std::uint64_t                   m_u64StartTimestampMilliseconds = 0;
@@ -1249,6 +1376,7 @@ private:
     bool                            m_bRunning = false;
     bool                            m_bPaused = false;
     bool                            m_bStopRequested = false;
+    bool                            m_bCommunicationMetricEmitted = false;
     std::uint64_t                   m_u64NextObservationEventId = 1;
 };
 
@@ -1257,6 +1385,7 @@ AuthenticationSenderRuntime::AuthenticationSenderRuntime(
     ResultHandler fnResultHandler,
     ObservationHandler fnObservationHandler,
     LocalKeyChainHandler fnLocalKeyChainHandler,
+    MetricHandler fnMetricHandler,
     std::string strLocalIpAddress
 )
     : m_ptrImpl(std::make_unique<Impl>(
@@ -1264,6 +1393,7 @@ AuthenticationSenderRuntime::AuthenticationSenderRuntime(
           std::move(fnResultHandler),
           std::move(fnObservationHandler),
           std::move(fnLocalKeyChainHandler),
+          std::move(fnMetricHandler),
           std::move(strLocalIpAddress)
       ))
 {

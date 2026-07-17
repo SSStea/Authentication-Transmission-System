@@ -3,6 +3,7 @@
 #include "tesla/core/AuthenticationRuntimeTypes.h"
 #include "tesla/core/LocalSenderKeyChainObservation.h"
 #include "tesla/core/SenderAuthenticationContext.h"
+#include "tesla/metrics/AuthenticationMetrics.h"
 #include "tesla/protocol/MonitorControl.h"
 #include "tesla/protocol/ProtocolTypes.h"
 #include "tesla/workload/FileWorkload.h"
@@ -38,12 +39,16 @@ public:
     using LocalKeyChainHandler = std::function<void(
         const LocalSenderKeyChainObservation&
     )>;
+    using MetricHandler = std::function<void(
+        const metrics::AuthenticationMetricRecord&
+    )>;
 
     AuthenticationSenderRuntime(
         DatagramSender fnDatagramSender,
         ResultHandler fnResultHandler,
         ObservationHandler fnObservationHandler = {},
         LocalKeyChainHandler fnLocalKeyChainHandler = {},
+        MetricHandler fnMetricHandler = {},
         std::string strLocalIpAddress = {}
     );
     ~AuthenticationSenderRuntime();

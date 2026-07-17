@@ -72,6 +72,7 @@ UavMonitorNetworkController::UavMonitorNetworkController(
             emit stateChanged();
             sendHello();
             requestAbnormalSnapshot();
+            requestMetricSnapshot();
             refreshStatus();
             m_pPollTimer->start();
         }
@@ -144,7 +145,9 @@ void UavMonitorNetworkController::connectToNode(
     m_pSocket->abort();
     m_decStream.reset();
     m_stoObservations.clear();
+    m_stoMetrics.clear();
     emit authenticationObservationsChanged();
+    emit authenticationMetricsChanged();
     m_strHostAddress = strHostAddress.trimmed();
     m_strNodeName.clear();
     m_bSenderRunning = false;
@@ -238,6 +241,12 @@ std::vector<DosSummaryControlDetails>
 UavMonitorNetworkController::vecDosSummarySnapshot() const
 {
     return m_stoObservations.vecDosSummarySnapshot();
+}
+
+std::vector<tesla::metrics::AuthenticationMetricRecord>
+UavMonitorNetworkController::vecMetricSnapshot() const
+{
+    return m_stoMetrics.vecSnapshot();
 }
 
 void UavMonitorNetworkController::processTcpData()
@@ -433,6 +442,28 @@ void UavMonitorNetworkController::processTcpData()
             }
             scheduleObservationRefresh();
         }
+        else if (msgMessage.typeMessage() == NodeControlMessageType::MetricEvent)
+        {
+            const auto& detMetrics = std::get<MetricEventControlDetails>(
+                msgMessage.varDetails()
+            );
+            for (const auto& varMetric : detMetrics.vecRecords())
+            {
+                appendMetric(varMetric);
+            }
+        }
+        else if (msgMessage.typeMessage()
+            == NodeControlMessageType::MetricSnapshot)
+        {
+            const auto& detSnapshot = std::get<MetricSnapshotControlDetails>(
+                msgMessage.varDetails()
+            );
+            for (const auto& varMetric : detSnapshot.vecRecords())
+            {
+                m_stoMetrics.bAppend(varMetric);
+            }
+            scheduleMetricRefresh();
+        }
     }
 }
 
@@ -448,6 +479,14 @@ void UavMonitorNetworkController::requestAbnormalSnapshot()
     bSendControl(NodeControlMessage(RequestControlDetails(
         NodeControlMessageType::AbnormalEventSnapshotRequest,
         strRequestId(QStringLiteral("monitor-abnormal-snapshot"))
+    )));
+}
+
+void UavMonitorNetworkController::requestMetricSnapshot()
+{
+    bSendControl(NodeControlMessage(RequestControlDetails(
+        NodeControlMessageType::MetricSnapshotRequest,
+        strRequestId(QStringLiteral("monitor-metric-snapshot"))
     )));
 }
 
@@ -472,6 +511,30 @@ void UavMonitorNetworkController::scheduleObservationRefresh()
     {
         m_bObservationRefreshScheduled = false;
         emit authenticationObservationsChanged();
+    });
+}
+
+void UavMonitorNetworkController::appendMetric(
+    const tesla::metrics::AuthenticationMetricRecord& varMetric
+)
+{
+    m_stoMetrics.bAppend(varMetric);
+    scheduleMetricRefresh();
+}
+
+void UavMonitorNetworkController::scheduleMetricRefresh()
+{
+    if (m_bMetricRefreshScheduled)
+    {
+        return;
+    }
+
+    // 指标批次只触发一次Qt排队刷新，避免高密度单包样本反复重绘图表。
+    m_bMetricRefreshScheduled = true;
+    QTimer::singleShot(0, this, [this]()
+    {
+        m_bMetricRefreshScheduled = false;
+        emit authenticationMetricsChanged();
     });
 }
 

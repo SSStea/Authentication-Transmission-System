@@ -1,6 +1,7 @@
 #include "ManagerMainWindow.h"
 
 #include "tesla/core/AuthenticationRoundParameters.h"
+#include "tesla/metrics/CommunicationCost.h"
 #include "tesla/workload/FileWorkload.h"
 
 #include <QAbstractItemView>
@@ -889,26 +890,16 @@ void ManagerMainWindow::validateAuthenticationInputs()
             (u64PacketCount
                 + static_cast<std::uint64_t>(nPacketsPerInterval) - 1U)
             / static_cast<std::uint64_t>(nPacketsPerInterval);
-        const std::uint64_t u64MessageBytes =
-            u64PacketCount * tesla::protocol::BINARY_BLOCK_SIZE;
-        const std::uint64_t u64KeyBytes =
-            u64DataIntervalCount * tesla::protocol::BINARY_BLOCK_SIZE;
-
-        if (!bImproved)
-        {
-            const std::uint64_t u64MacBytes =
-                u64PacketCount * tesla::protocol::BINARY_BLOCK_SIZE;
-            m_pCommunicationValue->setText(
-                QStringLiteral(
-                    "算法字段通信开销：Message %1B + Key %2B + MAC %3B = %4B"
-                )
-                    .arg(u64MessageBytes)
-                    .arg(u64KeyBytes)
-                    .arg(u64MacBytes)
-                    .arg(u64MessageBytes + u64KeyBytes + u64MacBytes)
+        tesla::metrics::CommunicationCostMetricSummary sumCommunication =
+            tesla::metrics::CommunicationCostCalculator::sumNative(
+                1,
+                "CONFIGURATION",
+                "MANAGER",
+                0,
+                u64PacketCount,
+                u64DataIntervalCount
             );
-        }
-        else
+        if (bImproved)
         {
             const tesla::core::ImprovedTeslaParameters prmImproved(
                 static_cast<std::uint32_t>(nGroupSize),
@@ -917,26 +908,28 @@ void ManagerMainWindow::validateAuthenticationInputs()
             const std::uint64_t u64GroupCount =
                 (u64PacketCount + static_cast<std::uint64_t>(nGroupSize) - 1U)
                 / static_cast<std::uint64_t>(nGroupSize);
-            const std::uint64_t u64TauBytes =
-                u64GroupCount * prmImproved.nTauCount()
-                * tesla::protocol::BINARY_BLOCK_SIZE;
-            const std::uint64_t u64FastTagBytes =
-                u64GroupCount * tesla::protocol::BINARY_BLOCK_SIZE;
-            m_pCommunicationValue->setText(
-                QStringLiteral(
-                    "算法字段通信开销：Message %1B + Key %2B + τ %3B + "
-                    "FastGroupTag %4B = %5B"
-                )
-                    .arg(u64MessageBytes)
-                    .arg(u64KeyBytes)
-                    .arg(u64TauBytes)
-                    .arg(u64FastTagBytes)
-                    .arg(
-                        u64MessageBytes + u64KeyBytes
-                        + u64TauBytes + u64FastTagBytes
-                    )
-            );
+            sumCommunication =
+                tesla::metrics::CommunicationCostCalculator::sumImproved(
+                    1,
+                    "CONFIGURATION",
+                    "MANAGER",
+                    0,
+                    u64PacketCount,
+                    u64DataIntervalCount,
+                    u64GroupCount * prmImproved.nTauCount(),
+                    u64GroupCount
+                );
         }
+
+        m_pCommunicationValue->setText(
+            QStringLiteral("认证模式：%1\n通信开销总字节数：%2B")
+                .arg(
+                    bImproved
+                        ? QStringLiteral("改进TESLA")
+                        : QStringLiteral("原生TESLA")
+                )
+                .arg(sumCommunication.u64TotalBytes())
+        );
     }
 
     refreshAuthenticationActions();

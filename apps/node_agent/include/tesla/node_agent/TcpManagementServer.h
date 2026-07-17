@@ -38,6 +38,9 @@ public:
         std::vector<protocol::PacketFailureControlDetails>
     >;
     using AbnormalSnapshotProvider = std::function<AbnormalSnapshot()>;
+    using MetricSnapshotProvider = std::function<
+        std::vector<metrics::AuthenticationMetricRecord>()
+    >;
 
     TcpManagementServer(
         std::string strBindAddress,
@@ -46,7 +49,8 @@ public:
         RuntimeStateProvider fnStateProvider,
         ControlMessageHandler fnControlMessageHandler,
         FilePayloadHandler fnFilePayloadHandler,
-        AbnormalSnapshotProvider fnAbnormalSnapshotProvider
+        AbnormalSnapshotProvider fnAbnormalSnapshotProvider,
+        MetricSnapshotProvider fnMetricSnapshotProvider
     );
     ~TcpManagementServer();
 
@@ -63,6 +67,10 @@ public:
     /** @brief 将高频观察事件放入有界队列，只异步发送给MONITOR客户端。 */
     void enqueueMonitorObservation(
         const protocol::AuthenticationObservation& varObservation
+    ) noexcept;
+    /** @brief 指标使用独立有界队列，并在发送线程内最多64条合并为一帧。 */
+    void enqueueMonitorMetric(
+        const metrics::AuthenticationMetricRecord& varMetric
     ) noexcept;
 
 private:
@@ -89,6 +97,7 @@ private:
     ControlMessageHandler            m_fnControlMessageHandler;
     FilePayloadHandler               m_fnFilePayloadHandler;
     AbnormalSnapshotProvider         m_fnAbnormalSnapshotProvider;
+    MetricSnapshotProvider           m_fnMetricSnapshotProvider;
     std::atomic<bool>                m_bRunning{false};
     std::atomic<int>                 m_nListenSocket{-1};
     std::thread                      m_thrAccept;
@@ -99,6 +108,7 @@ private:
     mutable std::mutex               m_mtxMonitorQueue;
     std::condition_variable          m_cndMonitorQueue;
     std::deque<protocol::NodeControlMessage> m_deqMonitorQueue;
+    std::deque<metrics::AuthenticationMetricRecord> m_deqMetricQueue;
     std::atomic<std::size_t>         m_nDroppedMonitorEventCount{0};
 };
 }

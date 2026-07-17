@@ -1,5 +1,6 @@
 #include "UavMonitorMainWindow.h"
 
+#include "AuthenticationMetricsView.h"
 #include "AuthenticationMonitorWidget.h"
 
 #include <QDateTime>
@@ -73,23 +74,9 @@ UavMonitorMainWindow::UavMonitorMainWindow(
         pTabs
     );
     pTabs->addTab(m_pAuthenticationMonitor, QStringLiteral("报文与异常"));
-    pTabs->addTab(
-        pCreatePlaceholderPage(
-            QStringLiteral("计算开销"),
-            QStringLiteral("阶段9显示真实验证耗时和设备支持的Cache指标。")
-        ),
-        QStringLiteral("计算")
-    );
-    pTabs->addTab(
-        pCreatePlaceholderPage(
-            QStringLiteral("估算验证能耗"),
-            QStringLiteral(
-                "阶段9使用固定文献系数和实际验证耗时，"
-                "界面必须明确标注为估算能耗。"
-            )
-        ),
-        QStringLiteral("估算能耗")
-    );
+    m_ptrMetricsView = std::make_unique<AuthenticationMetricsView>(pTabs);
+    pTabs->addTab(m_ptrMetricsView->pComputationPage(), QStringLiteral("计算"));
+    pTabs->addTab(m_ptrMetricsView->pEnergyPage(), QStringLiteral("估算能耗"));
     pTabs->addTab(pCreateFileStatusPage(), QStringLiteral("文件"));
     pTabs->addTab(pCreateLogPage(), QStringLiteral("日志"));
     pLayout->addWidget(pTabs, 1);
@@ -122,9 +109,18 @@ UavMonitorMainWindow::UavMonitorMainWindow(
         this,
         &UavMonitorMainWindow::refreshAuthenticationViews
     );
+    connect(
+        &m_ctlNetwork,
+        &UavMonitorNetworkController::authenticationMetricsChanged,
+        this,
+        &UavMonitorMainWindow::refreshAuthenticationMetrics
+    );
     refreshStatus();
     refreshAuthenticationViews();
+    refreshAuthenticationMetrics();
 }
+
+UavMonitorMainWindow::~UavMonitorMainWindow() = default;
 
 QWidget* UavMonitorMainWindow::pCreateConnectionPage()
 {
@@ -206,24 +202,6 @@ QWidget* UavMonitorMainWindow::pCreateConnectionPage()
     return pPage;
 }
 
-QWidget* UavMonitorMainWindow::pCreatePlaceholderPage(
-    const QString& strTitle,
-    const QString& strDescription
-)
-{
-    QWidget* pPage = new QWidget(this);
-    QVBoxLayout* pLayout = new QVBoxLayout(pPage);
-    QLabel* pTitleLabel = new QLabel(strTitle, pPage);
-    pTitleLabel->setObjectName(QStringLiteral("sectionTitleLabel"));
-    QLabel* pDescriptionLabel = new QLabel(strDescription, pPage);
-    pDescriptionLabel->setWordWrap(true);
-    pDescriptionLabel->setObjectName(QStringLiteral("hintLabel"));
-    pLayout->addWidget(pTitleLabel);
-    pLayout->addWidget(pDescriptionLabel);
-    pLayout->addStretch();
-    return pPage;
-}
-
 QWidget* UavMonitorMainWindow::pCreateLogPage()
 {
     QWidget* pPage = new QWidget(this);
@@ -271,6 +249,11 @@ void UavMonitorMainWindow::refreshAuthenticationViews()
         m_ctlNetwork.vecFailureObservationSnapshot(),
         m_ctlNetwork.vecDosSummarySnapshot()
     );
+}
+
+void UavMonitorMainWindow::refreshAuthenticationMetrics()
+{
+    m_ptrMetricsView->setRecords(m_ctlNetwork.vecMetricSnapshot());
 }
 
 void UavMonitorMainWindow::refreshStatus()

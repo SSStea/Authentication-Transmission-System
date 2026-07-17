@@ -6,3 +6,4 @@
 - [网络协议与NodeAgent](network-protocol-and-node-agent.md)
 - [阶段5四套GUI框架与连接](stage5-gui-framework-and-connections.md)
 - [阶段8报文、异常与本地可视化](stage8-observation-and-visualization.md)
+- [阶段9通信、计算与估算能耗指标](stage9-metrics-and-estimated-energy.md)

@@ -4,6 +4,7 @@
 #include "tesla/core/AuthenticationObservationStore.h"
 #include "tesla/core/LocalSenderKeyChainObservation.h"
 #include "tesla/core/ReceiverAuthenticationContextStore.h"
+#include "tesla/metrics/AuthenticationMetrics.h"
 #include "tesla/protocol/NodeControlMessage.h"
 #include "tesla/protocol/ProtocolTypes.h"
 #include "tesla/workload/FileWorkload.h"
@@ -44,6 +45,9 @@ public:
     using LocalKeyChainHandler = std::function<void(
         const LocalSenderKeyChainObservation&
     )>;
+    using MetricHandler = std::function<void(
+        const metrics::AuthenticationMetricRecord&
+    )>;
 
     AuthenticationNodeRuntime(
         std::string strNodeName,
@@ -53,6 +57,7 @@ public:
         RecoveredFileHandler fnRecoveredFileHandler = {},
         ObservationHandler fnObservationHandler = {},
         LocalKeyChainHandler fnLocalKeyChainHandler = {},
+        MetricHandler fnMetricHandler = {},
         std::string strLocalIpAddress = {}
     );
     ~AuthenticationNodeRuntime();
@@ -99,6 +104,8 @@ public:
         vecGroupObservationSnapshot() const;
     std::vector<protocol::DosSummaryControlDetails>
         vecDosSummarySnapshot() const;
+    std::vector<metrics::AuthenticationMetricRecord>
+        vecMetricSnapshot() const;
 
 private:
     class Impl;

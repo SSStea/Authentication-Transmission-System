@@ -46,7 +46,9 @@ TeslaAuthenticationDetails NativeTeslaStrategy::authCreateAuthenticationDetails(
 TeslaVerificationResult NativeTeslaStrategy::vfyVerify(
     const AuthenticationGroupInput& grpInput,
     const TeslaAuthenticationDetails& varReceivedDetails,
-    const crypto::Digest& digDataKey
+    const crypto::Digest& digDataKey,
+    metrics::VerificationPerformanceSampler* pPerformanceSampler,
+    VerificationMeasurementHandler fnMeasurementHandler
 ) const
 {
     // variant类型必须与当前策略匹配，避免把改进模式字段误作逐包MAC解释。
@@ -89,13 +91,29 @@ TeslaVerificationResult NativeTeslaStrategy::vfyVerify(
             continue;
         }
 
+        const bool bMeasure = pPerformanceSampler != nullptr
+            && static_cast<bool>(fnMeasurementHandler);
+        if (bMeasure)
+        {
+            pPerformanceSampler->begin();
+        }
+
         const crypto::Digest digCalculatedMac = TeslaMac::digComputePacketMac(
             m_crpProvider,
             digDataKey,
             optPacket.value()
         );
+        const bool bMacMatched = crypto::CryptoUtilities::bDigestEquals(
+            digCalculatedMac,
+            optReceivedMac.value()
+        );
 
-        if (crypto::CryptoUtilities::bDigestEquals(digCalculatedMac, optReceivedMac.value()))
+        if (bMeasure)
+        {
+            fnMeasurementHandler(nPosition, pPerformanceSampler->mstEnd());
+        }
+
+        if (bMacMatched)
         {
             vecPacketStatuses.push_back(NativePacketStatus::Passed);
         }

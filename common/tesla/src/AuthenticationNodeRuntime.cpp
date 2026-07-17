@@ -208,6 +208,7 @@ public:
         RecoveredFileHandler fnRecoveredFileHandler,
         ObservationHandler fnObservationHandler,
         LocalKeyChainHandler fnLocalKeyChainHandler,
+        MetricHandler fnMetricHandler,
         std::string strLocalIpAddress
     )
         : m_strNodeName(std::move(strNodeName)),
@@ -218,6 +219,7 @@ public:
           m_fnRecoveredFileHandler(std::move(fnRecoveredFileHandler)),
           m_fnObservationHandler(std::move(fnObservationHandler)),
           m_fnLocalKeyChainHandler(std::move(fnLocalKeyChainHandler)),
+          m_fnMetricHandler(std::move(fnMetricHandler)),
           m_runSender(
               std::move(fnDatagramSender),
               [this](const AuthenticationRuntimeResult& resResult)
@@ -235,6 +237,10 @@ public:
               {
                   processLocalKeyChainObservation(varObservation);
               },
+              [this](const metrics::AuthenticationMetricRecord& varMetric)
+              {
+                  processMetric(varMetric);
+              },
               std::move(strLocalIpAddress)
           ),
           m_runReceiver(
@@ -248,6 +254,10 @@ public:
               [this](const protocol::AuthenticationObservation& varObservation)
               {
                   processObservation(varObservation);
+              },
+              [this](const metrics::AuthenticationMetricRecord& varMetric)
+              {
+                  processMetric(varMetric);
               }
           )
     {
@@ -931,6 +941,24 @@ private:
         }
     }
 
+    void processMetric(
+        const metrics::AuthenticationMetricRecord& varMetric
+    ) noexcept
+    {
+        try
+        {
+            m_stoMetrics.bAppend(varMetric);
+            if (m_fnMetricHandler)
+            {
+                m_fnMetricHandler(varMetric);
+            }
+        }
+        catch (...)
+        {
+            // 指标存储或平台展示失败不得改变认证状态机结果。
+        }
+    }
+
 public:
     std::vector<protocol::PacketObservationControlDetails>
     vecPacketObservationSnapshot() const
@@ -961,6 +989,11 @@ public:
         return m_stoObservations.vecDosSummarySnapshot();
     }
 
+    std::vector<metrics::AuthenticationMetricRecord> vecMetricSnapshot() const
+    {
+        return m_stoMetrics.vecSnapshot();
+    }
+
 private:
 
     std::string m_strNodeName;
@@ -969,7 +1002,9 @@ private:
     RecoveredFileHandler m_fnRecoveredFileHandler;
     ObservationHandler m_fnObservationHandler;
     LocalKeyChainHandler m_fnLocalKeyChainHandler;
+    MetricHandler m_fnMetricHandler;
     AuthenticationObservationStore m_stoObservations;
+    metrics::AuthenticationMetricStore m_stoMetrics;
     mutable std::mutex m_mtxConfig;
     std::optional<SenderAuthenticationContext> m_optSenderContext;
     AuthenticationSenderRuntime m_runSender;
@@ -984,6 +1019,7 @@ AuthenticationNodeRuntime::AuthenticationNodeRuntime(
     RecoveredFileHandler fnRecoveredFileHandler,
     ObservationHandler fnObservationHandler,
     LocalKeyChainHandler fnLocalKeyChainHandler,
+    MetricHandler fnMetricHandler,
     std::string strLocalIpAddress
 )
     : m_ptrImpl(std::make_unique<Impl>(
@@ -994,6 +1030,7 @@ AuthenticationNodeRuntime::AuthenticationNodeRuntime(
           std::move(fnRecoveredFileHandler),
           std::move(fnObservationHandler),
           std::move(fnLocalKeyChainHandler),
+          std::move(fnMetricHandler),
           std::move(strLocalIpAddress)
       ))
 {
@@ -1118,5 +1155,11 @@ std::vector<protocol::DosSummaryControlDetails>
 AuthenticationNodeRuntime::vecDosSummarySnapshot() const
 {
     return m_ptrImpl->vecDosSummarySnapshot();
+}
+
+std::vector<metrics::AuthenticationMetricRecord>
+AuthenticationNodeRuntime::vecMetricSnapshot() const
+{
+    return m_ptrImpl->vecMetricSnapshot();
 }
 }

@@ -5,11 +5,13 @@
 #include <QMainWindow>
 
 #include <cstdint>
+#include <memory>
 
 class QLabel;
 class QLineEdit;
 class QSpinBox;
 class QTextEdit;
+class AuthenticationMetricsView;
 namespace tesla::gui
 {
 class AuthenticationMonitorWidget;
@@ -25,19 +27,17 @@ public:
         std::uint16_t u16DefaultManagementPort = 38020,
         QWidget* pParent = nullptr
     );
+    ~UavMonitorMainWindow() override;
 
 private:
     QWidget* pCreateConnectionPage();
-    QWidget* pCreatePlaceholderPage(
-        const QString& strTitle,
-        const QString& strDescription
-    );
     QWidget* pCreateFileStatusPage();
     QWidget* pCreateLogPage();
     void refreshStatus();
     void appendLog(const QString& strMessage);
     void appendFileStatus(const QString& strMessage);
     void refreshAuthenticationViews();
+    void refreshAuthenticationMetrics();
     void applyStyle();
 
     UavMonitorNetworkController m_ctlNetwork;
@@ -51,4 +51,5 @@ private:
     QTextEdit*                  m_pFileStatusEdit;
     QTextEdit*                  m_pLogEdit;
     tesla::gui::AuthenticationMonitorWidget* m_pAuthenticationMonitor;
+    std::unique_ptr<AuthenticationMetricsView> m_ptrMetricsView;
 };

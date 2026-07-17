@@ -72,7 +72,9 @@ TeslaAuthenticationDetails ImprovedTeslaStrategy::authCreateAuthenticationDetail
 TeslaVerificationResult ImprovedTeslaStrategy::vfyVerify(
     const AuthenticationGroupInput& grpInput,
     const TeslaAuthenticationDetails& varReceivedDetails,
-    const crypto::Digest& digDataKey
+    const crypto::Digest& digDataKey,
+    metrics::VerificationPerformanceSampler* pPerformanceSampler,
+    VerificationMeasurementHandler fnMeasurementHandler
 ) const
 {
     // variant类型必须与当前策略匹配，防止跨模式错误解释认证字段。
@@ -89,13 +91,27 @@ TeslaVerificationResult ImprovedTeslaStrategy::vfyVerify(
         throw std::invalid_argument("Improved group exceeds configured KS+RS group size");
     }
 
+    const bool bMeasure = pPerformanceSampler != nullptr
+        && static_cast<bool>(fnMeasurementHandler);
+    if (bMeasure)
+    {
+        pPerformanceSampler->begin();
+    }
+    const auto fnFinishMeasurement = [&]()
+    {
+        if (bMeasure)
+        {
+            fnMeasurementHandler(0, pPerformanceSampler->mstEnd());
+        }
+    };
+
     // tau数量不完整或快速标签缺失时，既不能走快速路径也不能安全回退。
     if (
         pImprovedDetails->vecSamdTau().size() != m_matKsRs.nRowCount()
         || !pImprovedDetails->optFastGroupTag().has_value()
     )
     {
-        return TeslaVerificationResult(
+        TeslaVerificationResult vfyResult(
             false,
             ImprovedVerificationDetails(
                 ImprovedVerificationPath::IncompleteGroupTags,
@@ -105,6 +121,8 @@ TeslaVerificationResult ImprovedTeslaStrategy::vfyVerify(
                 false
             )
         );
+        fnFinishMeasurement();
+        return vfyResult;
     }
 
     // 完整组优先验证一次快速标签；成功时不再执行任何逐包MAC计算。
@@ -129,7 +147,7 @@ TeslaVerificationResult ImprovedTeslaStrategy::vfyVerify(
                 0
             );
 
-            return TeslaVerificationResult(
+            TeslaVerificationResult vfyResult(
                 true,
                 ImprovedVerificationDetails(
                     ImprovedVerificationPath::FastGroupPass,
@@ -139,6 +157,8 @@ TeslaVerificationResult ImprovedTeslaStrategy::vfyVerify(
                     false
                 )
             );
+            fnFinishMeasurement();
+            return vfyResult;
         }
     }
 
@@ -152,7 +172,7 @@ TeslaVerificationResult ImprovedTeslaStrategy::vfyVerify(
         pImprovedDetails->vecSamdTau()
     );
 
-    return TeslaVerificationResult(
+    TeslaVerificationResult vfyResult(
         false,
         ImprovedVerificationDetails(
             ImprovedVerificationPath::KsRsFallback,
@@ -163,6 +183,8 @@ TeslaVerificationResult ImprovedTeslaStrategy::vfyVerify(
             resKsRs.vecLocationSteps()
         )
     );
+    fnFinishMeasurement();
+    return vfyResult;
 }
 
 std::vector<std::optional<crypto::Digest>>

@@ -1,4 +1,6 @@
 qt_add_executable(tesla_uav_monitor_gui
+    AuthenticationMetricsView.cpp
+    AuthenticationMetricsView.h
     UavMonitorMainWindow.cpp
     UavMonitorMainWindow.h
     UavMonitorNetworkController.cpp
@@ -8,10 +10,12 @@ qt_add_executable(tesla_uav_monitor_gui
 )
 
 source_group("Header Files" FILES
+    AuthenticationMetricsView.h
     UavMonitorMainWindow.h
     UavMonitorNetworkController.h
 )
 source_group("Source Files" FILES
+    AuthenticationMetricsView.cpp
     UavMonitorMainWindow.cpp
     UavMonitorNetworkController.cpp
     main.cpp

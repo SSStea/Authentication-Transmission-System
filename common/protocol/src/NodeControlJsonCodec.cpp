@@ -60,10 +60,16 @@ const char* pTypeName(NodeControlMessageType typeMessage)
         return "IMPROVED_GROUP_OBSERVATION_EVENT";
     case NodeControlMessageType::DosSummaryEvent:
         return "DOS_SUMMARY_EVENT";
+    case NodeControlMessageType::MetricEvent:
+        return "METRIC_EVENT";
     case NodeControlMessageType::AbnormalEventSnapshotRequest:
         return "ABNORMAL_EVENT_SNAPSHOT_REQUEST";
     case NodeControlMessageType::AbnormalEventSnapshot:
         return "ABNORMAL_EVENT_SNAPSHOT";
+    case NodeControlMessageType::MetricSnapshotRequest:
+        return "METRIC_SNAPSHOT_REQUEST";
+    case NodeControlMessageType::MetricSnapshot:
+        return "METRIC_SNAPSHOT";
     case NodeControlMessageType::ErrorResponse:
         return "ERROR";
     }
@@ -1153,6 +1159,370 @@ AuthenticationRoundControlParameters prmDecodeRoundParameters(
     );
 }
 
+const char* pCounterStatusName(metrics::HardwareCounterStatus statusCounters)
+{
+    switch (statusCounters)
+    {
+    case metrics::HardwareCounterStatus::Supported:
+        return "SUPPORTED";
+    case metrics::HardwareCounterStatus::NotSupported:
+        return "NOT_SUPPORTED";
+    case metrics::HardwareCounterStatus::PermissionDenied:
+        return "PERMISSION_DENIED";
+    case metrics::HardwareCounterStatus::ReadFailed:
+        return "READ_FAILED";
+    }
+
+    throw std::invalid_argument("Unknown hardware counter status");
+}
+
+metrics::HardwareCounterStatus statusCounterParse(const std::string& strStatus)
+{
+    if (strStatus == "SUPPORTED")
+    {
+        return metrics::HardwareCounterStatus::Supported;
+    }
+    if (strStatus == "NOT_SUPPORTED")
+    {
+        return metrics::HardwareCounterStatus::NotSupported;
+    }
+    if (strStatus == "PERMISSION_DENIED")
+    {
+        return metrics::HardwareCounterStatus::PermissionDenied;
+    }
+    if (strStatus == "READ_FAILED")
+    {
+        return metrics::HardwareCounterStatus::ReadFailed;
+    }
+
+    throw std::invalid_argument("Unknown hardware counter status");
+}
+
+const char* pMetricPathName(metrics::VerificationMetricPath pathVerification)
+{
+    switch (pathVerification)
+    {
+    case metrics::VerificationMetricPath::NativePacketVerify:
+        return "NATIVE_PACKET_VERIFY";
+    case metrics::VerificationMetricPath::FastGroupPass:
+        return "FAST_GROUP_PASS";
+    case metrics::VerificationMetricPath::KsRsFallback:
+        return "KS_RS_FALLBACK";
+    case metrics::VerificationMetricPath::IncompleteGroupTags:
+        return "INCOMPLETE_GROUP_TAGS";
+    }
+
+    throw std::invalid_argument("Unknown verification metric path");
+}
+
+metrics::VerificationMetricPath pathMetricParse(const std::string& strPath)
+{
+    if (strPath == "NATIVE_PACKET_VERIFY")
+    {
+        return metrics::VerificationMetricPath::NativePacketVerify;
+    }
+    if (strPath == "FAST_GROUP_PASS")
+    {
+        return metrics::VerificationMetricPath::FastGroupPass;
+    }
+    if (strPath == "KS_RS_FALLBACK")
+    {
+        return metrics::VerificationMetricPath::KsRsFallback;
+    }
+    if (strPath == "INCOMPLETE_GROUP_TAGS")
+    {
+        return metrics::VerificationMetricPath::IncompleteGroupTags;
+    }
+
+    throw std::invalid_argument("Unknown verification metric path");
+}
+
+nlohmann::json jsnEncodeHardwareCounters(
+    const metrics::HardwarePerformanceCounters& ctrHardware
+)
+{
+    return {
+        {"status", pCounterStatusName(ctrHardware.statusCounters())},
+        {"cpuCycles", ctrHardware.u64CpuCycles()},
+        {"cacheReferences", ctrHardware.u64CacheReferences()},
+        {"cacheMisses", ctrHardware.u64CacheMisses()}
+    };
+}
+
+metrics::HardwarePerformanceCounters ctrDecodeHardwareCounters(
+    const nlohmann::json& jsnCounters
+)
+{
+    return metrics::HardwarePerformanceCounters(
+        statusCounterParse(jsnCounters.at("status").get<std::string>()),
+        jsnCounters.value("cpuCycles", static_cast<std::uint64_t>(0)),
+        jsnCounters.value("cacheReferences", static_cast<std::uint64_t>(0)),
+        jsnCounters.value("cacheMisses", static_cast<std::uint64_t>(0))
+    );
+}
+
+nlohmann::json jsnEncodeMetricRecord(
+    const metrics::AuthenticationMetricRecord& varRecord
+)
+{
+    if (const auto* pSample = std::get_if<metrics::VerificationMetricSample>(
+            &varRecord
+        ))
+    {
+        nlohmann::json jsnDetails;
+        if (const auto* pNative = std::get_if<
+                metrics::NativeVerificationMetricDetails
+            >(&pSample->varDetails()))
+        {
+            jsnDetails = {
+                {"type", "NATIVE"},
+                {"intervalIndex", pNative->u32IntervalIndex()},
+                {"packetIndex", pNative->u32PacketIndex()}
+            };
+        }
+        else
+        {
+            const auto& detImproved = std::get<
+                metrics::ImprovedVerificationMetricDetails
+            >(pSample->varDetails());
+            jsnDetails = {
+                {"type", "IMPROVED"},
+                {"groupIndex", detImproved.u32GroupIndex()},
+                {"firstPacketIndex", detImproved.u32FirstPacketIndex()},
+                {"lastPacketIndex", detImproved.u32LastPacketIndex()},
+                {"verificationPath", pMetricPathName(
+                    detImproved.pathVerification()
+                )}
+            };
+        }
+
+        return {
+            {"recordType", "VERIFICATION_SAMPLE"},
+            {"eventId", pSample->u64EventId()},
+            {"timestampMs", pSample->u64TimestampMilliseconds()},
+            {"roundId", pSample->strRoundId()},
+            {"senderId", pSample->strSenderId()},
+            {"chainId", AuthenticationControlValueCodec::strEncodeChainId(
+                pSample->u64ChainId()
+            )},
+            {"packetCount", pSample->u32PacketCount()},
+            {"durationNs", pSample->mstPerformance().u64DurationNanoseconds()},
+            {"hardware", jsnEncodeHardwareCounters(
+                pSample->mstPerformance().ctrHardware()
+            )},
+            {"details", std::move(jsnDetails)}
+        };
+    }
+
+    if (const auto* pEnergy = std::get_if<metrics::EstimatedEnergyMetricSummary>(
+            &varRecord
+        ))
+    {
+        nlohmann::json jsnDetails;
+        if (const auto* pNative = std::get_if<metrics::NativeRoundMetricDetails>(
+                &pEnergy->varDetails()
+            ))
+        {
+            jsnDetails = {
+                {"type", "NATIVE"},
+                {"verifiedPacketCount", pNative->u32VerifiedPacketCount()}
+            };
+        }
+        else
+        {
+            const auto& detImproved = std::get<
+                metrics::ImprovedRoundMetricDetails
+            >(pEnergy->varDetails());
+            jsnDetails = {
+                {"type", "IMPROVED"},
+                {"fastGroupCount", detImproved.u32FastGroupCount()},
+                {"fallbackGroupCount", detImproved.u32FallbackGroupCount()},
+                {"incompleteGroupCount", detImproved.u32IncompleteGroupCount()}
+            };
+        }
+
+        return {
+            {"recordType", "ESTIMATED_ENERGY_SUMMARY"},
+            {"timestampMs", pEnergy->u64TimestampMilliseconds()},
+            {"roundId", pEnergy->strRoundId()},
+            {"senderId", pEnergy->strSenderId()},
+            {"chainId", AuthenticationControlValueCodec::strEncodeChainId(
+                pEnergy->u64ChainId()
+            )},
+            {"packetCount", pEnergy->u32PacketCount()},
+            {"verifyTimeNs", pEnergy->u64VerifyTimeNanoseconds()},
+            {"receivedAuthBytes", pEnergy->u64ReceivedAuthBytes()},
+            {"estimatedEnergyMicroJoule", pEnergy->dEstimatedEnergyMicroJoule()},
+            {"normalComparisonEligible", pEnergy->bNormalComparisonEligible()},
+            {"details", std::move(jsnDetails)}
+        };
+    }
+
+    const auto& sumCommunication = std::get<
+        metrics::CommunicationCostMetricSummary
+    >(varRecord);
+    nlohmann::json jsnDetails;
+    if (const auto* pNative = std::get_if<metrics::NativeCommunicationCostDetails>(
+            &sumCommunication.varDetails()
+        ))
+    {
+        jsnDetails = {
+            {"type", "NATIVE"},
+            {"messageBytes", pNative->u64MessageBytes()},
+            {"keyBytes", pNative->u64KeyBytes()},
+            {"macBytes", pNative->u64MacBytes()}
+        };
+    }
+    else
+    {
+        const auto& detImproved = std::get<
+            metrics::ImprovedCommunicationCostDetails
+        >(sumCommunication.varDetails());
+        jsnDetails = {
+            {"type", "IMPROVED"},
+            {"messageBytes", detImproved.u64MessageBytes()},
+            {"keyBytes", detImproved.u64KeyBytes()},
+            {"tauBytes", detImproved.u64TauBytes()},
+            {"fastGroupTagBytes", detImproved.u64FastGroupTagBytes()}
+        };
+    }
+
+    return {
+        {"recordType", "COMMUNICATION_COST_SUMMARY"},
+        {"timestampMs", sumCommunication.u64TimestampMilliseconds()},
+        {"roundId", sumCommunication.strRoundId()},
+        {"senderId", sumCommunication.strSenderId()},
+        {"chainId", AuthenticationControlValueCodec::strEncodeChainId(
+            sumCommunication.u64ChainId()
+        )},
+        {"details", std::move(jsnDetails)}
+    };
+}
+
+metrics::AuthenticationMetricRecord varDecodeMetricRecord(
+    const nlohmann::json& jsnRecord
+)
+{
+    const std::string strRecordType =
+        jsnRecord.at("recordType").get<std::string>();
+    const std::uint64_t u64ChainId =
+        AuthenticationControlValueCodec::u64DecodeChainId(
+            jsnRecord.at("chainId").get<std::string>()
+        );
+    const nlohmann::json& jsnDetails = jsnRecord.at("details");
+    const std::string strDetailType = jsnDetails.at("type").get<std::string>();
+
+    if (strRecordType == "VERIFICATION_SAMPLE")
+    {
+        metrics::VerificationMetricDetails varDetails =
+            strDetailType == "NATIVE"
+            ? metrics::VerificationMetricDetails(
+                metrics::NativeVerificationMetricDetails(
+                    jsnDetails.at("intervalIndex").get<std::uint32_t>(),
+                    jsnDetails.at("packetIndex").get<std::uint32_t>()
+                )
+            )
+            : metrics::VerificationMetricDetails(
+                metrics::ImprovedVerificationMetricDetails(
+                    jsnDetails.at("groupIndex").get<std::uint32_t>(),
+                    jsnDetails.at("firstPacketIndex").get<std::uint32_t>(),
+                    jsnDetails.at("lastPacketIndex").get<std::uint32_t>(),
+                    pathMetricParse(
+                        jsnDetails.at("verificationPath").get<std::string>()
+                    )
+                )
+            );
+        if (strDetailType != "NATIVE" && strDetailType != "IMPROVED")
+        {
+            throw std::invalid_argument("Unknown verification metric detail type");
+        }
+
+        return metrics::VerificationMetricSample(
+            jsnRecord.at("eventId").get<std::uint64_t>(),
+            jsnRecord.at("timestampMs").get<std::uint64_t>(),
+            jsnRecord.at("roundId").get<std::string>(),
+            jsnRecord.at("senderId").get<std::string>(),
+            u64ChainId,
+            jsnRecord.at("packetCount").get<std::uint32_t>(),
+            metrics::PerformanceMeasurement(
+                jsnRecord.at("durationNs").get<std::uint64_t>(),
+                ctrDecodeHardwareCounters(jsnRecord.at("hardware"))
+            ),
+            std::move(varDetails)
+        );
+    }
+
+    if (strRecordType == "ESTIMATED_ENERGY_SUMMARY")
+    {
+        metrics::AuthenticationRoundMetricDetails varDetails =
+            strDetailType == "NATIVE"
+            ? metrics::AuthenticationRoundMetricDetails(
+                metrics::NativeRoundMetricDetails(
+                    jsnDetails.at("verifiedPacketCount").get<std::uint32_t>()
+                )
+            )
+            : metrics::AuthenticationRoundMetricDetails(
+                metrics::ImprovedRoundMetricDetails(
+                    jsnDetails.at("fastGroupCount").get<std::uint32_t>(),
+                    jsnDetails.at("fallbackGroupCount").get<std::uint32_t>(),
+                    jsnDetails.at("incompleteGroupCount").get<std::uint32_t>()
+                )
+            );
+        if (strDetailType != "NATIVE" && strDetailType != "IMPROVED")
+        {
+            throw std::invalid_argument("Unknown energy metric detail type");
+        }
+
+        return metrics::EstimatedEnergyMetricSummary(
+            jsnRecord.at("timestampMs").get<std::uint64_t>(),
+            jsnRecord.at("roundId").get<std::string>(),
+            jsnRecord.at("senderId").get<std::string>(),
+            u64ChainId,
+            jsnRecord.at("packetCount").get<std::uint32_t>(),
+            jsnRecord.at("verifyTimeNs").get<std::uint64_t>(),
+            jsnRecord.at("receivedAuthBytes").get<std::uint64_t>(),
+            jsnRecord.at("estimatedEnergyMicroJoule").get<double>(),
+            jsnRecord.at("normalComparisonEligible").get<bool>(),
+            std::move(varDetails)
+        );
+    }
+
+    if (strRecordType == "COMMUNICATION_COST_SUMMARY")
+    {
+        metrics::CommunicationCostDetails varDetails =
+            strDetailType == "NATIVE"
+            ? metrics::CommunicationCostDetails(
+                metrics::NativeCommunicationCostDetails(
+                    jsnDetails.at("messageBytes").get<std::uint64_t>(),
+                    jsnDetails.at("keyBytes").get<std::uint64_t>(),
+                    jsnDetails.at("macBytes").get<std::uint64_t>()
+                )
+            )
+            : metrics::CommunicationCostDetails(
+                metrics::ImprovedCommunicationCostDetails(
+                    jsnDetails.at("messageBytes").get<std::uint64_t>(),
+                    jsnDetails.at("keyBytes").get<std::uint64_t>(),
+                    jsnDetails.at("tauBytes").get<std::uint64_t>(),
+                    jsnDetails.at("fastGroupTagBytes").get<std::uint64_t>()
+                )
+            );
+        if (strDetailType != "NATIVE" && strDetailType != "IMPROVED")
+        {
+            throw std::invalid_argument("Unknown communication metric detail type");
+        }
+
+        return metrics::CommunicationCostMetricSummary(
+            jsnRecord.at("timestampMs").get<std::uint64_t>(),
+            jsnRecord.at("roundId").get<std::string>(),
+            jsnRecord.at("senderId").get<std::string>(),
+            u64ChainId,
+            std::move(varDetails)
+        );
+    }
+
+    throw std::invalid_argument("Unknown authentication metric record type");
+}
+
 ProtocolDecodeError errCreate(const std::string& strMessage)
 {
     return ProtocolDecodeError(
@@ -1177,7 +1547,9 @@ std::string NodeControlJsonCodec::strEncode(const NodeControlMessage& msgMessage
         || msgMessage.typeMessage() == NodeControlMessageType::Pong
         || msgMessage.typeMessage() == NodeControlMessageType::StatusRequest
         || msgMessage.typeMessage()
-            == NodeControlMessageType::AbnormalEventSnapshotRequest)
+            == NodeControlMessageType::AbnormalEventSnapshotRequest
+        || msgMessage.typeMessage()
+            == NodeControlMessageType::MetricSnapshotRequest)
     {
         jsnMessage["requestId"] = std::get<RequestControlDetails>(
             msgMessage.varDetails()
@@ -1418,6 +1790,18 @@ std::string NodeControlJsonCodec::strEncode(const NodeControlMessage& msgMessage
         jsnMessage["receiveQueueOverflowCount"] =
             detSummary.u64ReceiveQueueOverflowCount();
     }
+    else if (msgMessage.typeMessage() == NodeControlMessageType::MetricEvent)
+    {
+        const MetricEventControlDetails& detMetrics = std::get<
+            MetricEventControlDetails
+        >(msgMessage.varDetails());
+        jsnMessage["records"] = nlohmann::json::array();
+        for (const metrics::AuthenticationMetricRecord& varRecord
+            : detMetrics.vecRecords())
+        {
+            jsnMessage["records"].push_back(jsnEncodeMetricRecord(varRecord));
+        }
+    }
     else if (msgMessage.typeMessage()
         == NodeControlMessageType::AbnormalEventSnapshot)
     {
@@ -1440,6 +1824,21 @@ std::string NodeControlJsonCodec::strEncode(const NodeControlMessage& msgMessage
             : detSnapshot.vecFailureEvents())
         {
             jsnMessage["failureEvents"].push_back(jsnEncodeFailure(detFailure));
+        }
+    }
+    else if (msgMessage.typeMessage() == NodeControlMessageType::MetricSnapshot)
+    {
+        const MetricSnapshotControlDetails& detSnapshot = std::get<
+            MetricSnapshotControlDetails
+        >(msgMessage.varDetails());
+        jsnMessage["requestId"] = detSnapshot.strRequestId();
+        jsnMessage["sequence"] = detSnapshot.u32Sequence();
+        jsnMessage["finalBatch"] = detSnapshot.bFinalBatch();
+        jsnMessage["records"] = nlohmann::json::array();
+        for (const metrics::AuthenticationMetricRecord& varRecord
+            : detSnapshot.vecRecords())
+        {
+            jsnMessage["records"].push_back(jsnEncodeMetricRecord(varRecord));
         }
     }
     else
@@ -1476,7 +1875,8 @@ NodeControlDecodeResult NodeControlJsonCodec::resDecode(const std::string& strJs
         if (strType == "PING"
             || strType == "PONG"
             || strType == "STATUS_REQUEST"
-            || strType == "ABNORMAL_EVENT_SNAPSHOT_REQUEST")
+            || strType == "ABNORMAL_EVENT_SNAPSHOT_REQUEST"
+            || strType == "METRIC_SNAPSHOT_REQUEST")
         {
             NodeControlMessageType typeMessage = NodeControlMessageType::StatusRequest;
             if (strType == "PING")
@@ -1490,6 +1890,10 @@ NodeControlDecodeResult NodeControlJsonCodec::resDecode(const std::string& strJs
             else if (strType == "ABNORMAL_EVENT_SNAPSHOT_REQUEST")
             {
                 typeMessage = NodeControlMessageType::AbnormalEventSnapshotRequest;
+            }
+            else if (strType == "METRIC_SNAPSHOT_REQUEST")
+            {
+                typeMessage = NodeControlMessageType::MetricSnapshotRequest;
             }
 
             return NodeControlMessage(RequestControlDetails(
@@ -1736,6 +2140,27 @@ NodeControlDecodeResult NodeControlJsonCodec::resDecode(const std::string& strJs
             ));
         }
 
+        if (strType == "METRIC_EVENT")
+        {
+            const nlohmann::json& jsnRecords = jsnMessage.at("records");
+            if (!jsnRecords.is_array()
+                || jsnRecords.empty()
+                || jsnRecords.size() > 64)
+            {
+                throw std::invalid_argument("Metric event batch is invalid");
+            }
+
+            std::vector<metrics::AuthenticationMetricRecord> vecRecords;
+            vecRecords.reserve(jsnRecords.size());
+            for (const nlohmann::json& jsnRecord : jsnRecords)
+            {
+                vecRecords.push_back(varDecodeMetricRecord(jsnRecord));
+            }
+            return NodeControlMessage(MetricEventControlDetails(
+                std::move(vecRecords)
+            ));
+        }
+
         if (strType == "ABNORMAL_EVENT_SNAPSHOT")
         {
             std::vector<PacketObservationControlDetails> vecPackets;
@@ -1769,6 +2194,28 @@ NodeControlDecodeResult NodeControlJsonCodec::resDecode(const std::string& strJs
                 jsnMessage.at("finalBatch").get<bool>(),
                 std::move(vecPackets),
                 std::move(vecFailures)
+            ));
+        }
+
+        if (strType == "METRIC_SNAPSHOT")
+        {
+            const nlohmann::json& jsnRecords = jsnMessage.at("records");
+            if (!jsnRecords.is_array() || jsnRecords.size() > 64)
+            {
+                throw std::invalid_argument("Metric snapshot batch is invalid");
+            }
+
+            std::vector<metrics::AuthenticationMetricRecord> vecRecords;
+            vecRecords.reserve(jsnRecords.size());
+            for (const nlohmann::json& jsnRecord : jsnRecords)
+            {
+                vecRecords.push_back(varDecodeMetricRecord(jsnRecord));
+            }
+            return NodeControlMessage(MetricSnapshotControlDetails(
+                jsnMessage.at("requestId").get<std::string>(),
+                jsnMessage.at("sequence").get<std::uint32_t>(),
+                jsnMessage.at("finalBatch").get<bool>(),
+                std::move(vecRecords)
             ));
         }
 

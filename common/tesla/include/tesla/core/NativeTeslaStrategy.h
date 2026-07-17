@@ -27,7 +27,9 @@ public:
     TeslaVerificationResult vfyVerify(
         const AuthenticationGroupInput& grpInput,
         const TeslaAuthenticationDetails& varReceivedDetails,
-        const crypto::Digest& digDataKey
+        const crypto::Digest& digDataKey,
+        metrics::VerificationPerformanceSampler* pPerformanceSampler = nullptr,
+        VerificationMeasurementHandler fnMeasurementHandler = {}
     ) const override;
 
 private:

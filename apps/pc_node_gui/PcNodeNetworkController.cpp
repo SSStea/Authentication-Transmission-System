@@ -277,6 +277,7 @@ PcNodeNetworkController::PcNodeNetworkController(
                     Qt::QueuedConnection
                 );
             },
+            tesla::core::AuthenticationNodeRuntime::MetricHandler(),
             m_adrLocalAddress.toString().toStdString()
         );
 

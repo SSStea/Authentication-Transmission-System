@@ -38,7 +38,8 @@ RequestControlDetails::RequestControlDetails(
     if (m_typeMessage != NodeControlMessageType::Ping
         && m_typeMessage != NodeControlMessageType::Pong
         && m_typeMessage != NodeControlMessageType::StatusRequest
-        && m_typeMessage != NodeControlMessageType::AbnormalEventSnapshotRequest)
+        && m_typeMessage != NodeControlMessageType::AbnormalEventSnapshotRequest
+        && m_typeMessage != NodeControlMessageType::MetricSnapshotRequest)
     {
         throw std::invalid_argument("Request control details contain an unsupported type");
     }
@@ -232,11 +233,21 @@ NodeControlMessageType NodeControlMessage::typeMessage() const noexcept
         return NodeControlMessageType::DosSummaryEvent;
     }
 
+    if (std::holds_alternative<MetricEventControlDetails>(m_varDetails))
+    {
+        return NodeControlMessageType::MetricEvent;
+    }
+
     if (std::holds_alternative<AbnormalEventSnapshotControlDetails>(
             m_varDetails
         ))
     {
         return NodeControlMessageType::AbnormalEventSnapshot;
+    }
+
+    if (std::holds_alternative<MetricSnapshotControlDetails>(m_varDetails))
+    {
+        return NodeControlMessageType::MetricSnapshot;
     }
 
     return NodeControlMessageType::ErrorResponse;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tesla/core/AuthenticationObservationStore.h"
+#include "tesla/metrics/AuthenticationMetrics.h"
 #include "tesla/protocol/NodeControlMessage.h"
 #include "tesla/protocol/TcpFrame.h"
 
@@ -51,6 +52,8 @@ public:
         vecGroupObservationSnapshot() const;
     std::vector<tesla::protocol::DosSummaryControlDetails>
         vecDosSummarySnapshot() const;
+    std::vector<tesla::metrics::AuthenticationMetricRecord>
+        vecMetricSnapshot() const;
 
 signals:
     void stateChanged();
@@ -58,15 +61,21 @@ signals:
     void logMessage(const QString& strMessage);
     void fileStatusMessage(const QString& strMessage);
     void authenticationObservationsChanged();
+    void authenticationMetricsChanged();
 
 private:
     void processTcpData();
     void sendHello();
     void requestAbnormalSnapshot();
+    void requestMetricSnapshot();
     void appendObservation(
         const tesla::protocol::AuthenticationObservation& varObservation
     );
     void scheduleObservationRefresh();
+    void appendMetric(
+        const tesla::metrics::AuthenticationMetricRecord& varMetric
+    );
+    void scheduleMetricRefresh();
     void sendPing();
     bool bSendControl(const tesla::protocol::NodeControlMessage& msgMessage);
     void checkConnection();
@@ -82,5 +91,7 @@ private:
     bool                      m_bReceiverRunning;
     qint64                    m_nLastResponseMilliseconds;
     tesla::core::AuthenticationObservationStore m_stoObservations;
+    tesla::metrics::AuthenticationMetricStore m_stoMetrics;
     bool                      m_bObservationRefreshScheduled{false};
+    bool                      m_bMetricRefreshScheduled{false};
 };

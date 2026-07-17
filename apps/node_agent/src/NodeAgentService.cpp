@@ -152,6 +152,10 @@ NodeAgentService::NodeAgentService(
                   m_runAuthentication.vecAbnormalPacketObservationSnapshot(),
                   m_runAuthentication.vecFailureObservationSnapshot()
               );
+          },
+          [this]()
+          {
+              return m_runAuthentication.vecMetricSnapshot();
           }
       ),
       m_runAuthentication(
@@ -178,6 +182,10 @@ NodeAgentService::NodeAgentService(
               m_srvManagement.enqueueMonitorObservation(varObservation);
           },
           {},
+          [this](const metrics::AuthenticationMetricRecord& varMetric)
+          {
+              m_srvManagement.enqueueMonitorMetric(varMetric);
+          },
           m_cfgConfig.strBindAddress()
       ),
       m_srvDiscovery(
